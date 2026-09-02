@@ -1,0 +1,22 @@
+# dependencias y compilados
+node_modules/
+dist/
+.vercel/
+
+# python
+__pycache__/
+*.py[cod]
+
+# entorno
+.env
+.env.local
+.env.*.local
+
+# descargas de prueba y capturas
+*.zip
+.playwright-mcp/
+
+# sistema
+Thumbs.db
+desktop.ini
+.DS_Store
