@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#04070c" />
-    <meta name="description" content="Extractor de certificados por DNI - JOMISER + EIN" />
+    <meta name="description" content="Extractor de certificados por DNI - JOMISER" />
     <title>NEXA // Extractor de Certificados</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -27,8 +27,7 @@
         </div>
         <div class="head-r">
           <span class="tag">JOMISER</span>
-          <span class="tag">EIN · WebNexa</span>
-          <span class="head-ver">v1.0</span>
+          <span class="head-ver">v2.0</span>
         </div>
       </header>
 
@@ -66,43 +65,6 @@
           </div>
         </section>
 
-        <section class="panel" aria-labelledby="t-cfg">
-          <div class="panel-head">
-            <h2 id="t-cfg">02 · FUENTES</h2>
-            <button class="lnk" id="btn-cred" type="button">credenciales</button>
-          </div>
-
-          <div class="panel-body">
-            <div class="switches">
-              <label class="sw">
-                <input type="checkbox" id="src-jomiser" checked />
-                <span class="sw-box"></span>
-                <span class="sw-txt"><b>JOMISER</b><em>aula.jomiser.com</em></span>
-              </label>
-              <label class="sw">
-                <input type="checkbox" id="src-ein" checked />
-                <span class="sw-box"></span>
-                <span class="sw-txt"><b>EIN</b><em>WebNexa · Cert. x Persona</em></span>
-              </label>
-            </div>
-
-            <div class="cred" id="cred" hidden>
-              <div class="cred-f">
-                <label class="lbl" for="usuario">Usuario EIN</label>
-                <input id="usuario" class="inp" type="text" autocomplete="off" spellcheck="false" />
-              </div>
-              <div class="cred-f">
-                <label class="lbl" for="password">Contraseña</label>
-                <input id="password" class="inp" type="password" autocomplete="off" />
-              </div>
-              <p class="hint">
-                Vacío = credenciales del servidor (<code>EIN_USUARIO</code> /
-                <code>EIN_PASSWORD</code>).
-              </p>
-            </div>
-          </div>
-        </section>
-
         <section class="panel panel-go">
           <div class="panel-body">
             <div class="dest" id="dest-row">
@@ -135,7 +97,7 @@
       <div class="col col-out">
         <section class="panel panel-res" id="panel-res" hidden aria-labelledby="t-res">
           <div class="panel-head">
-            <h2 id="t-res">03 · RESULTADOS</h2>
+            <h2 id="t-res">02 · RESULTADOS</h2>
             <span class="count" id="res-count"></span>
           </div>
           <div class="panel-body panel-body-scroll">
@@ -151,7 +113,7 @@
 
         <section class="panel panel-term" aria-labelledby="t-log">
           <div class="panel-head">
-            <h2 id="t-log">04 · CONSOLA</h2>
+            <h2 id="t-log">03 · CONSOLA</h2>
             <button class="lnk" id="btn-log-clear" type="button">limpiar</button>
           </div>
           <div class="panel-body panel-body-flush">

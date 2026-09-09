@@ -1,18 +1,10 @@
-# Extractor de Certificados — JOMISER + EIN
+# Extractor de Certificados — JOMISER
 
 Descarga todos los certificados de una persona (o de una lista) desde
-**JOMISER** (`aula.jomiser.com`) y **EIN / WebNexa** (`Certificados > Cert. x Persona`).
+**JOMISER** (`aula.jomiser.com`). Acepta un DNI, una lista pegada o un
+**Excel/CSV**.
 
-Hay **dos versiones** que comparten la misma lógica de extracción:
-
-| | Web (este repo, raíz) | Escritorio |
-|---|---|---|
-| Ubicación | `/` | `escritorio/` |
-| Interfaz | Vite, estética terminal, responsive | tkinter (ventana Windows) |
-| Entrada | un DNI, lista pegada o **Excel/CSV** | un DNI |
-| Salida | carpeta elegida por el usuario, o ZIP | escribe en la ruta que elijas |
-| Requiere | desplegar en Vercel (o `npm run dev`) | Python 3.8+, sin dependencias |
-| Ideal para | usar desde el móvil o compartir | lotes largos sin límite de tiempo |
+App web en Vite con funciones serverless para Vercel.
 
 ---
 
@@ -29,14 +21,12 @@ Hay **dos versiones** que comparten la misma lógica de extracción:
 │       ├── api.js        cliente de las funciones
 │       └── guardar.js    escritura en carpeta y ZIP
 ├── api/                  funciones serverless (Node)
-│   ├── _lib/nexa.js      scraping de ambas plataformas
-│   ├── search.js         POST → inventario de certificados de un DNI
+│   ├── _lib/nexa.js      extracción de JOMISER
+│   ├── search.js         POST → certificados de un DNI
 │   └── download.js       POST → UN PDF
 ├── dev-server.js         emula Vercel en local
 ├── vercel.json           maxDuration 60 s
-└── escritorio/
-    ├── descargar_certificados.py
-    └── EJECUTAR.bat
+└── escritorio/           versión antigua en Python (incluye EIN)
 ```
 
 > La app web vive en la **raíz del repo** a propósito: así Vercel detecta Vite y
@@ -56,24 +46,13 @@ npm i -g vercel
 vercel --prod
 ```
 
-### Variables de entorno (recomendado)
-
-En **Settings → Environment Variables**:
-
-| Variable | Valor |
-|---|---|
-| `EIN_USUARIO` | usuario de WebNexa |
-| `EIN_PASSWORD` | contraseña |
-
-Si no las defines se usan las del código. En la interfaz, el enlace
-*credenciales* permite sobrescribirlas por sesión.
+JOMISER es una consulta pública, así que no hacen falta credenciales ni
+variables de entorno.
 
 > La app queda pública al desplegarla. Si no quieres que cualquiera consulte
 > certificados, activa
 > [Vercel Authentication](https://vercel.com/docs/security/deployment-protection)
 > en Settings → Deployment Protection.
-
----
 
 ## Desarrollo local
 
@@ -87,90 +66,82 @@ node dev-server.js        # http://localhost:3000  (front + /api)
 Con recarga en caliente: `vercel dev`, o `npm run dev` (Vite hace proxy de
 `/api` al 3000).
 
-## Versión de escritorio
-
-```
-escritorio\EJECUTAR.bat                                    # ventana
-python escritorio\descargar_certificados.py 71481337 "D:\Certif"   # consola
-```
-
 ---
 
-## Lo que generan (ambas, igual)
+## Salida
+
+### ZIP
+
+Solo los certificados, sueltos en la raíz. Sin subcarpetas y sin resumen:
 
 ```
-71481337/
-├── JOMISER/
-│   ├── 2026-08-28_EXCAVACIONES SUBTERRÁNEAS.pdf
-│   └── 2026-08-29_TRABAJOS EN ALTURA.pdf
-├── EIN/
-│   ├── 137518_RIESGOS CRITICOS_09-08-2026.pdf
-│   └── 137197_INDUCCIÓN_15-08-2026.pdf
-└── resumen.txt
+certificados_71481337.zip
+├── 2026-08-28_EXCAVACIONES SUBTERRÁNEAS.pdf
+├── 2026-08-29_TRABAJOS EN ALTURA.pdf
+├── 2026-08-29_HERRAMIENTAS DE PODER.pdf
+└── 2026-08-30_SUSTANCIAS QUÍMICAS PELIGROSAS.pdf
 ```
 
-`resumen.txt` lista todo: lo descargado, lo que no tiene certificado
-(desaprobados) y los errores.
+Con **varios DNI** el nombre lleva el documento delante
+(`71481337_2026-08-28_EXCAVACIONES SUBTERRÁNEAS.pdf`), porque al ir todos
+sueltos dos personas podrían coincidir en curso y fecha y no sabrías de quién es
+cada archivo.
 
-### Guardado en la web
+### Carpeta del equipo
 
 Al pulsar **INICIAR EXTRACCIÓN** se abre primero el explorador para elegir la
 carpeta. Cada PDF **se escribe en disco en cuanto llega**, no al final: en lotes
 grandes no se acumula nada en memoria y lo ya descargado queda guardado aunque
-abortes a mitad.
+abortes a mitad. Se crea una subcarpeta por DNI para que un lote de muchas
+personas no acabe como cientos de archivos sueltos:
+
+```
+<carpeta elegida>/
+└── 71481337/
+    ├── 2026-08-28_EXCAVACIONES SUBTERRÁNEAS.pdf
+    └── 2026-08-29_TRABAJOS EN ALTURA.pdf
+```
 
 Requiere la File System Access API (Chrome/Edge de escritorio). Donde no existe
-—Firefox, Safari, móvil— la app lo detecta, no pide carpeta y ofrece
-**DESCARGAR ZIP** al terminar, con la misma estructura dentro.
+—Firefox, Safari, móvil— la app lo detecta, no pide carpeta y ofrece el ZIP.
 
-Al acabar avisa por tres vías: aviso en la página, notificación del sistema (si
-concedes el permiso) y un pitido corto.
+### Aviso al terminar
+
+Como un lote puede tardar varios minutos y sueles dejarlo en segundo plano, al
+acabar se avisa por tres vías: un aviso en la propia página, una notificación
+del sistema (si concedes el permiso, que se pide al iniciar sin bloquear) y un
+pitido corto.
 
 ---
 
-## Ceros a la izquierda — por qué importa tanto
+## Ceros a la izquierda
 
 Excel guarda `07481337` como el **número** 7481337: el cero desaparece del
-archivo. Como en ambas plataformas todos los documentos son de 8 dígitos, las
-dos versiones rellenan a 8 y avisan del cambio valor por valor.
+archivo. Como todos los documentos son de 8 dígitos, la app rellena a 8 y **te
+muestra exactamente qué cambió**, valor por valor:
 
-No es un detalle cosmético. **EIN busca por coincidencia parcial (LIKE):**
-
-| Búsqueda en EIN | Resultado |
-|---|---|
-| `10350889` | los certificados de 10350889 ✓ |
-| `0350889` | ⚠️ **también** los de 10350889 |
-| `350889` | ⚠️ **también** los de 10350889 |
-
-Un DNI sin su cero **no da error**: entrega en silencio los certificados de otra
-persona. Por eso, además de rellenar, ambas versiones **descartan toda fila cuyo
-NDocumento no sea idéntico al DNI pedido** y lo avisan.
+```
+cero restaurado: 7481337 → 07481337
+cero restaurado: 350889  → 00350889
+```
 
 El lector de Excel distingue si la celda venía como **texto** (ceros intactos) o
-como **número** (ceros perdidos). Detecta la columna por la cabecera (`DNI`,
-`DOCUMENTO`, `NDocumento`, `CÉDULA`…) y, si no hay, elige la que tenga más
-valores con forma de documento. El `.xls` antiguo no se puede leer: guárdalo como
-`.xlsx` o `.csv`.
+como **número** (ceros perdidos) y lo informa. Detecta la columna por la cabecera
+(`DNI`, `DOCUMENTO`, `NDocumento`, `CÉDULA`…) y, si no hay, elige la que tenga
+más valores con forma de documento. El `.xls` antiguo no se puede leer: guárdalo
+como `.xlsx` o `.csv`.
 
 ---
 
-## Particularidades del servidor EIN que el código maneja
+## Detalles de JOMISER
 
-- **Devuelve el certificado de otra persona de forma intermitente.** Bug de
-  concurrencia del reporte Crystal en el servidor (~1 de cada 4 descargas; pasa
-  igual haciendo clic a mano). Cada PDF se abre, se extrae su texto y se verifica
-  que el registro `<COD><DNI>` sea el esperado; si no, se reintenta. Sin esta
-  comprobación archivarías certificados equivocados sin notarlo.
-- **La página del reporte cambia según el curso**: RIESGOS CRÍTICOS abre
-  `WebFormCertificad.aspx` e INDUCCIÓN `WebFormCertificad_induccion.aspx`. Se usa
-  la URL a la que redirige el servidor, no una fija, así que cursos nuevos
-  funcionan solos.
-- **Los desaprobados no generan certificado** en ninguna de las dos plataformas:
-  se marcan `SIN CERTIFICADO`, no como error.
-- **Corta conexiones al azar**: todas las peticiones reintentan con espera
-  progresiva.
-- La empresa "TP" del combo EMPRESA devuelve error 500; se usa siempre la
-  seleccionada por defecto (NEXA MINERIA).
+- Es una consulta pública: `GET /certificados?dni=<DNI>` devuelve la tabla, y
+  cada fila aprobada trae un enlace `/pdf/exportar-certificado/<id>`.
+- **Busca por coincidencia exacta**, así que un DNI mal escrito no devuelve a
+  otra persona. Aun así se comprueba que el `COD. IDENTIDAD` de la respuesta sea
+  el DNI pedido.
+- **Los desaprobados no tienen certificado**: se marcan `SIN CERTIFICADO`, no
+  como error.
 
 ---
 
@@ -178,16 +149,15 @@ valores con forma de documento. El `.xls` antiguo no se puede leer: guárdalo co
 
 Las funciones de Vercel tienen dos límites que la tarea rompe de inmediato:
 
-- **60 s de ejecución** en el plan Hobby. Descargar los certificados de un solo
-  DNI ya toma más (el reporte Crystal de EIN es lento y hay reintentos).
+- **60 s de ejecución** en el plan Hobby.
 - **4.5 MB por respuesta**. Un solo PDF de JOMISER pesa 421 KB.
 
 Por eso cada función hace **una operación corta**:
 
 ```
-navegador                       serverless                servidores
+navegador                       serverless                JOMISER
    │                                                          │
-   ├── POST /api/search   ──►  login + búsqueda  ────────────►│
+   ├── POST /api/search   ──►  consulta por DNI  ────────────►│
    │   ◄── lista de certificados                              │
    │                                                          │
    ├── POST /api/download ──►  1 certificado     ────────────►│
@@ -195,4 +165,17 @@ navegador                       serverless                servidores
    │   … se repite por cada certificado                       │
    │
    └── guarda en la carpeta elegida (o arma el ZIP)
+```
+
+---
+
+## Versión de escritorio (`escritorio/`)
+
+App en Python + tkinter, sin dependencias. **Sigue descargando de JOMISER y de
+EIN/WebNexa**, y guarda con la estructura antigua (`<DNI>/JOMISER/`,
+`<DNI>/EIN/` y `resumen.txt`).
+
+```
+escritorio\EJECUTAR.bat                                          # ventana
+python escritorio\descargar_certificados.py 71481337 "D:\Certif" # consola
 ```

@@ -1,15 +1,12 @@
 /**
  * POST /api/search
- * Body: { dni, jomiser?, ein?, usuario?, password?, cookies? }
+ * Body: { dni }
  *
- * Devuelve el inventario de certificados de un DNI en ambas plataformas.
+ * Devuelve el inventario de certificados de un DNI en JOMISER.
  * No descarga nada: eso lo pide el navegador uno por uno a /api/download.
  */
 
-import { Jar, einBuscar, einLogin, jomiserBuscar, normalizarDni } from "./_lib/nexa.js";
-
-const EIN_USUARIO = process.env.EIN_USUARIO || "MROBLESV";
-const EIN_PASSWORD = process.env.EIN_PASSWORD || "123456";
+import { jomiserBuscar, normalizarDni } from "./_lib/nexa.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -24,67 +21,27 @@ export default async function handler(req, res) {
       res.status(400).json({ error: "DNI invalido" });
       return;
     }
-    const dni = norm.dni;
-    const usarJomiser = body.jomiser !== false;
-    const usarEin = body.ein !== false;
 
     const salida = {
-      dni,
+      dni: norm.dni,
       original: norm.original,
       relleno: norm.relleno,
       participante: "",
-      jomiser: { items: [], error: null, aviso: null },
-      ein: { items: [], error: null, aviso: null },
-      cookies: null,
+      items: [],
+      error: null,
+      aviso: null,
     };
 
-    const tareas = [];
-
-    if (usarJomiser) {
-      tareas.push(
-        jomiserBuscar(dni)
-          .then((r) => {
-            salida.jomiser.items = r.items;
-            salida.jomiser.aviso = r.aviso;
-            if (r.participante) salida.participante = salida.participante || r.participante;
-          })
-          .catch((e) => {
-            salida.jomiser.error = e.message;
-          })
-      );
+    try {
+      const r = await jomiserBuscar(norm.dni);
+      salida.participante = r.participante;
+      salida.items = r.items;
+      salida.aviso = r.aviso;
+    } catch (e) {
+      salida.error = e.message;
     }
 
-    if (usarEin) {
-      tareas.push(
-        (async () => {
-          const usuario = body.usuario || EIN_USUARIO;
-          const password = body.password || EIN_PASSWORD;
-          let jar = new Jar(body.cookies || "");
-          try {
-            if (jar.vacio) jar = await einLogin(usuario, password);
-            let r;
-            try {
-              r = await einBuscar(jar, dni);
-            } catch (e) {
-              // sesion reutilizada que ya expiro: se reintenta con login nuevo
-              if (!/sesion EIN expirada/i.test(e.message)) throw e;
-              jar = await einLogin(usuario, password);
-              r = await einBuscar(jar, dni);
-            }
-            salida.ein.items = r.items;
-            salida.ein.aviso = r.aviso;
-            salida.cookies = jar.cabecera;
-            if (r.participante) salida.participante = salida.participante || r.participante;
-          } catch (e) {
-            salida.ein.error = e.message;
-          }
-        })()
-      );
-    }
-
-    await Promise.all(tareas);
-
-    salida.total = salida.jomiser.items.filter((i) => i.descargable).length + salida.ein.items.length;
+    salida.total = salida.items.filter((i) => i.descargable).length;
     res.status(200).json(salida);
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });

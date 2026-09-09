@@ -13,7 +13,6 @@ import { extraerDocumentos } from "./lib/excel.js";
 import { buscar, descargar } from "./lib/api.js";
 import {
   EscritorCarpeta,
-  asignarNombres,
   descargarZip,
   elegirCarpeta,
   guardarEnCarpeta,
@@ -29,12 +28,6 @@ const el = {
   limpiar: $("btn-limpiar"),
   avisoCeros: $("aviso-ceros"),
   avisoArchivo: $("aviso-archivo"),
-  jomiser: $("src-jomiser"),
-  ein: $("src-ein"),
-  cred: $("cred"),
-  btnCred: $("btn-cred"),
-  usuario: $("usuario"),
-  password: $("password"),
   run: $("btn-run"),
   stop: $("btn-stop"),
   barWrap: $("bar-wrap"),
@@ -164,9 +157,7 @@ el.archivo.addEventListener("change", async (ev) => {
     el.dnis.value = union.items.map((i) => i.dni).join("\n");
     refrescarConteo();
 
-    const partes = [
-      `<b>${archivo.name}</b> → ${valores.length} valor(es) leído(s) de ${detalle}.`,
-    ];
+    const partes = [`<b>${archivo.name}</b> → ${valores.length} valor(es) leído(s) de ${detalle}.`];
     if (corregidos.length) {
       partes.push(
         `<b>${corregidos.length} con el cero inicial restaurado:</b> ` +
@@ -197,10 +188,6 @@ el.archivo.addEventListener("change", async (ev) => {
   } finally {
     ev.target.value = "";
   }
-});
-
-el.btnCred.addEventListener("click", () => {
-  el.cred.hidden = !el.cred.hidden;
 });
 
 el.logClear.addEventListener("click", () => {
@@ -256,7 +243,7 @@ function notificar(titulo, detalle, tipo = "ok") {
   // 1) aviso dentro de la pagina (siempre funciona)
   clearTimeout(cerrarToast);
   el.toast.className = `toast ${tipo === "ok" ? "" : tipo}`.trim();
-  el.toastIc.textContent = tipo === "err" ? "!" : tipo === "warn" ? "!" : "✓";
+  el.toastIc.textContent = tipo === "ok" ? "✓" : "!";
   el.toastTit.textContent = titulo;
   el.toastSub.textContent = detalle;
   el.toast.hidden = false;
@@ -330,7 +317,6 @@ const CLASE_ESTADO = {
   DESCARGADO: "st-ok",
   "SIN CERTIFICADO": "st-skip",
   PENDIENTE: "st-wait",
-  "SIN VERIFICAR": "st-warn",
 };
 
 /** Un PDF puede estar en memoria (pdf) o ya escrito en disco (guardado). */
@@ -363,22 +349,18 @@ function pintar() {
     for (const it of obj.items) {
       const fila = document.createElement("div");
       fila.className = "item";
-      const desc =
-        it.fuente === "EIN"
-          ? `${it.curso} <span class="item-meta">· COD ${it.cod} · ${it.condicion}</span>`
-          : `${it.curso} <span class="item-meta">· ${it.fecha}</span>`;
       const clase = it.error ? "st-err" : CLASE_ESTADO[it.estado] || "st-skip";
       const etiqueta = it.error ? "ERROR" : it.estado;
       fila.innerHTML =
-        `<span class="item-src ${it.fuente === "EIN" ? "ein" : "jom"}">${it.fuente}</span>` +
-        `<span class="item-txt">${desc}${it.error ? `<br><span class="item-meta">${it.error}</span>` : ""}</span>` +
+        `<span class="item-txt">${it.curso} <span class="item-meta">· ${it.fecha}</span>` +
+        `${it.error ? `<br><span class="item-meta">${it.error}</span>` : ""}</span>` +
         `<span class="item-st ${clase}">${etiqueta}</span>`;
       cont.appendChild(fila);
     }
     if (!obj.items.length) {
       const vacio = document.createElement("div");
       vacio.className = "item";
-      vacio.innerHTML = `<span class="item-txt item-meta">Sin certificados en ninguna fuente</span>`;
+      vacio.innerHTML = `<span class="item-txt item-meta">Sin certificados</span>`;
       cont.appendChild(vacio);
     }
     card.appendChild(cont);
@@ -404,10 +386,6 @@ async function ejecutar() {
     el.dnis.focus();
     return;
   }
-  if (!el.jomiser.checked && !el.ein.checked) {
-    log("selecciona al menos una fuente", "warn");
-    return;
-  }
 
   corriendo = true;
   abortador = new AbortController();
@@ -424,13 +402,6 @@ async function ejecutar() {
   el.term.innerHTML = "";
   cursor = null;
 
-  const cred = {
-    usuario: el.usuario.value.trim() || undefined,
-    password: el.password.value || undefined,
-    jomiser: el.jomiser.checked,
-    ein: el.ein.checked,
-  };
-
   logHead(`INICIO · ${objetivos.length} documento(s)`);
   log(
     escritor
@@ -439,7 +410,6 @@ async function ejecutar() {
     "info"
   );
 
-  let cookies = null;
   let hecho = 0;
   let totalEstimado = objetivos.length; // se ajusta al conocer los certificados
 
@@ -447,13 +417,7 @@ async function ejecutar() {
     for (const [i, obj] of objetivos.entries()) {
       if (senal.aborted) break;
 
-      const registro = {
-        dni: obj.dni,
-        original: obj.original,
-        participante: "",
-        items: [],
-        avisos: [],
-      };
+      const registro = { dni: obj.dni, original: obj.original, participante: "", items: [], avisos: [] };
       resultados.push(registro);
 
       logHead(`[${i + 1}/${objetivos.length}] DNI ${obj.dni}`);
@@ -463,7 +427,7 @@ async function ejecutar() {
       /* ---- inventario ---- */
       let inv;
       try {
-        inv = await buscar({ dni: obj.dni, ...cred, cookies }, senal);
+        inv = await buscar({ dni: obj.dni }, senal);
       } catch (e) {
         if (senal.aborted) break;
         log(`  fallo la consulta: ${e.message}`, "err");
@@ -472,30 +436,19 @@ async function ejecutar() {
         continue;
       }
 
-      if (inv.cookies) cookies = inv.cookies; // se reusa la sesion EIN
+      if (inv.error) {
+        log(`  ${inv.error}`, "err");
+        registro.avisos.push(inv.error);
+      }
+      if (inv.aviso) {
+        log(`  ${inv.aviso}`, "warn");
+        registro.avisos.push(inv.aviso);
+      }
+
       registro.participante = inv.participante || "";
       if (inv.participante) log(`  ${inv.participante}`, "ok");
 
-      for (const [fuente, datos] of [
-        ["JOMISER", inv.jomiser],
-        ["EIN", inv.ein],
-      ]) {
-        if (datos.error) {
-          log(`  ${fuente}: ${datos.error}`, "err");
-          registro.avisos.push(`${fuente}: ${datos.error}`);
-        }
-        if (datos.aviso) {
-          log(`  ${fuente}: ${datos.aviso}`, "warn");
-          registro.avisos.push(`${fuente}: ${datos.aviso}`);
-        }
-      }
-
-      const pendientes = [
-        ...inv.jomiser.items.map((x) => ({ ...x, fuente: "JOMISER" })),
-        ...inv.ein.items.map((x) => ({ ...x, fuente: "EIN" })),
-      ];
-
-      registro.items = pendientes.map((p) => ({
+      registro.items = (inv.items || []).map((p) => ({
         ...p,
         estado: p.descargable ? "PENDIENTE" : p.estado || "SIN CERTIFICADO",
         pdf: null,
@@ -513,34 +466,19 @@ async function ejecutar() {
         progreso(hecho, totalEstimado, `${obj.dni} · ${it.curso}`.slice(0, 52));
 
         try {
-          const cuerpo =
-            it.fuente === "JOMISER"
-              ? { fuente: "JOMISER", id: it.id }
-              : { fuente: "EIN", dni: obj.dni, cod: it.cod, cookies, ...cred };
+          const r = await descargar({ id: it.id }, senal);
+          it.pdf = r.pdf;
+          it.estado = "DESCARGADO";
+          const kb = (r.pdf.byteLength / 1024).toFixed(0);
 
-          const r = await descargar(cuerpo, senal);
-
-          if (r.sinCertificado) {
-            it.estado = "SIN CERTIFICADO";
-            log(`  · ${it.curso}: sin certificado emitido`, "info");
+          if (escritor) {
+            // se vuelca a disco ya, no se acumula en memoria
+            it.archivo = await escritor.guardarItem(obj.dni, it);
+            it.pdf = null;
+            it.guardado = true;
+            log(`  · ${it.curso}: ${kb} KB → ${it.archivo}`, "ok");
           } else {
-            it.pdf = r.pdf;
-            it.estado = r.verificado === false && it.fuente === "EIN" ? "SIN VERIFICAR" : "DESCARGADO";
-            const kb = (r.pdf.byteLength / 1024).toFixed(0);
-
-            if (escritor) {
-              // se vuelca a disco ya, no se acumula en memoria
-              it.archivo = await escritor.guardarItem(obj.dni, it);
-              it.pdf = null;
-              it.guardado = true;
-              log(`  · ${it.curso}: ${kb} KB → ${it.archivo}`, "ok");
-            } else {
-              log(`  · ${it.curso}: ${kb} KB`, "ok");
-            }
-
-            if (it.estado === "SIN VERIFICAR") {
-              log(`    no se pudo verificar el titular del PDF`, "warn");
-            }
+            log(`  · ${it.curso}: ${kb} KB`, "ok");
           }
         } catch (e) {
           if (senal.aborted) break;
@@ -554,21 +492,11 @@ async function ejecutar() {
         pintar();
       }
 
-      // el resumen del DNI se escribe en cuanto termina, no al final de todo
-      if (escritor) {
-        try {
-          await escritor.guardarResumen(registro);
-        } catch (e) {
-          log(`  no se pudo escribir resumen.txt: ${e.message}`, "warn");
-        }
-      }
-
       hecho++;
       pintar();
     }
 
     /* ---- cierre ---- */
-    if (!escritor) asignarNombres(resultados);
     const totalPdf = totalObtenidos();
     const errores = resultados.reduce(
       (n, r) => n + r.items.filter((i) => i.error).length + r.avisos.length,
@@ -629,11 +557,7 @@ el.run.addEventListener("click", async () => {
   if (soportaCarpeta() && !carpetaDestino) {
     const elegida = await pedirCarpeta();
     if (!elegida) {
-      notificar(
-        "Falta la carpeta",
-        "Elige dónde guardar los certificados para poder empezar.",
-        "warn"
-      );
+      notificar("Falta la carpeta", "Elige dónde guardar los certificados para poder empezar.", "warn");
       return;
     }
   }
@@ -695,8 +619,8 @@ el.carpeta.addEventListener("click", async () => {
 
 (function arrancar() {
   const lineas = [
-    "NEXA_CERT_EXTRACTOR v1.0",
-    "objetivos: aula.jomiser.com · WebNexa/EIN",
+    "NEXA_CERT_EXTRACTOR v2.0",
+    "objetivo: aula.jomiser.com",
     soportaCarpeta()
       ? "al iniciar se pedirá la carpeta de guardado"
       : "este navegador descarga un ZIP (guardado en carpeta: Chrome/Edge de escritorio)",

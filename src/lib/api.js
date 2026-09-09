@@ -18,22 +18,15 @@ export async function buscar(cuerpo, senal) {
   return datos;
 }
 
-/**
- * Descarga UN certificado.
- * Devuelve { pdf: ArrayBuffer } | { sinCertificado: true, motivo } .
- */
+/** Descarga UN certificado. Devuelve { pdf: ArrayBuffer }. */
 export async function descargar(cuerpo, senal) {
   const res = await pedir("/api/download", cuerpo, senal);
   const tipo = res.headers.get("content-type") || "";
 
   if (tipo.includes("application/pdf")) {
-    return {
-      pdf: await res.arrayBuffer(),
-      verificado: res.headers.get("x-verificado") === "si",
-    };
+    return { pdf: await res.arrayBuffer() };
   }
 
   const datos = await res.json().catch(() => ({ error: `respuesta ilegible (HTTP ${res.status})` }));
-  if (datos.sinCertificado) return { sinCertificado: true, motivo: datos.motivo };
   throw new Error(datos.error || `HTTP ${res.status}`);
 }

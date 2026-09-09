@@ -5,8 +5,8 @@
  * pierde el cero. Al leer el archivo ya no existe. Como en ambas plataformas
  * todos los documentos son de 8 digitos, se rellena a 8 por la izquierda.
  *
- * Esto importa mas de lo que parece: EIN busca por coincidencia PARCIAL, asi
- * que "7481337" NO falla, devuelve los certificados de OTRA persona.
+ * Esto importa mas de lo que parece: si el DNI llega mal, la consulta puede
+ * no encontrar a la persona o traer a quien no es.
  */
 
 export const LARGO_DNI = 8;

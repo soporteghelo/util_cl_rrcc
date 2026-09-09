@@ -1,23 +1,15 @@
 /**
  * Guardado de resultados.
  *
- * Una funcion serverless no puede escribir en el disco del usuario, asi que el
- * navegador arma la estructura de carpetas:
- *
- *   <DNI>/JOMISER/*.pdf
- *   <DNI>/EIN/*.pdf
- *   <DNI>/resumen.txt
- *
  * Dos salidas:
- *   - ZIP  -> funciona en todos lados, incluido movil
- *   - Carpeta real -> File System Access API (Chrome/Edge escritorio),
- *     que es lo mas parecido a "elegir la ruta" de la version de escritorio
+ *   - ZIP  -> PDFs sueltos en la raiz, sin subcarpetas ni resumen.
+ *             Funciona en todos los navegadores, incluido movil.
+ *   - Carpeta real -> File System Access API (Chrome/Edge escritorio):
+ *             una subcarpeta por DNI, para que un lote de varias personas no
+ *             acabe como cientos de archivos sueltos.
  */
 
 import JSZip from "jszip";
-
-export const CARPETA_JOMISER = "JOMISER";
-export const CARPETA_EIN = "EIN";
 
 export const soportaCarpeta = () => typeof window.showDirectoryPicker === "function";
 
@@ -33,50 +25,14 @@ export function limpiarNombre(texto, max = 90) {
   );
 }
 
-/** Texto del resumen por DNI. */
-export function construirResumen(objetivo) {
-  const L = [];
-  L.push("RESUMEN DE DESCARGA DE CERTIFICADOS");
-  L.push("=".repeat(62));
-  L.push(`DNI          : ${objetivo.dni}`);
-  if (objetivo.original && objetivo.original !== objetivo.dni) {
-    L.push(`En el archivo: ${objetivo.original}  (rellenado con ceros a la izquierda)`);
-  }
-  L.push(`Participante : ${objetivo.participante || "-"}`);
-  L.push(`Fecha        : ${new Date().toLocaleString("es-PE")}`);
-  L.push("");
-
-  for (const [fuente, titulo] of [
-    [CARPETA_JOMISER, "JOMISER"],
-    [CARPETA_EIN, "EIN"],
-  ]) {
-    const items = objetivo.items.filter((i) => i.fuente === titulo);
-    L.push(`${titulo} (${items.length} registro(s))`);
-    L.push("-".repeat(62));
-    if (!items.length) L.push("  (sin registros)");
-    for (const it of items) {
-      const desc = it.fuente === "EIN" ? `COD ${it.cod} | ${it.curso} | ${it.condicion}` : `${it.fecha} | ${it.curso}`;
-      L.push(`  [${it.estado}] ${desc}`);
-      if (it.archivo) L.push(`      -> ${fuente}/${it.archivo}`);
-      if (it.error) L.push(`      !! ${it.error}`);
-    }
-    L.push("");
-  }
-
-  if (objetivo.avisos?.length) {
-    L.push("AVISOS");
-    L.push("-".repeat(62));
-    for (const a of objetivo.avisos) L.push(`  - ${a}`);
-  }
-  return L.join("\n") + "\n";
-}
-
-/** Nombre de archivo de un certificado ya descargado. */
-export function nombreDe(item) {
-  if (item.fuente === "JOMISER") {
-    return limpiarNombre(`${item.fecha}_${item.curso}`) + ".pdf";
-  }
-  return limpiarNombre(`${item.cod}_${item.curso}_${String(item.inicio || "").replace(/\//g, "-")}`) + ".pdf";
+/**
+ * Nombre del PDF. `conDni` antepone el documento: hace falta cuando todos los
+ * certificados van sueltos en la misma carpeta y varias personas podrian
+ * coincidir en curso y fecha.
+ */
+export function nombreDe(item, dni, conDni = false) {
+  const base = `${item.fecha}_${item.curso}`;
+  return limpiarNombre(conDni ? `${dni}_${base}` : base) + ".pdf";
 }
 
 function unico(usados, nombre) {
@@ -94,58 +50,6 @@ function unico(usados, nombre) {
   } while (usados.has(candidato));
   usados.add(candidato);
   return candidato;
-}
-
-/** Asigna nombre unico a cada PDF dentro de su carpeta. */
-export function asignarNombres(objetivos) {
-  for (const obj of objetivos) {
-    const usados = { [CARPETA_JOMISER]: new Set(), [CARPETA_EIN]: new Set() };
-    for (const it of obj.items) {
-      if (!it.pdf) continue;
-      const carpeta = it.fuente === "JOMISER" ? CARPETA_JOMISER : CARPETA_EIN;
-      it.archivo = unico(usados[carpeta], nombreDe(it));
-    }
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/* Salida: ZIP                                                         */
-/* ------------------------------------------------------------------ */
-
-export async function descargarZip(objetivos, alProgreso) {
-  const zip = new JSZip();
-  let n = 0;
-
-  for (const obj of objetivos) {
-    const raiz = zip.folder(limpiarNombre(obj.dni));
-    for (const it of obj.items) {
-      if (!it.pdf) continue;
-      const carpeta = it.fuente === "JOMISER" ? CARPETA_JOMISER : CARPETA_EIN;
-      raiz.folder(carpeta).file(it.archivo, it.pdf);
-      n++;
-    }
-    raiz.file("resumen.txt", construirResumen(obj));
-  }
-
-  const blob = await zip.generateAsync(
-    { type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } },
-    (meta) => alProgreso?.(meta.percent)
-  );
-
-  const sello = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
-  const nombre =
-    objetivos.length === 1 ? `certificados_${objetivos[0].dni}.zip` : `certificados_${objetivos.length}_dni_${sello}.zip`;
-
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = nombre;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-
-  return { nombre, archivos: n, bytes: blob.size };
 }
 
 /* ------------------------------------------------------------------ */
@@ -172,7 +76,7 @@ async function escribirArchivo(dir, nombre, contenido) {
 export class EscritorCarpeta {
   constructor(raiz) {
     this.raiz = raiz;
-    this.dnis = new Map(); // dni -> { dir, sub: Map, usados: Map }
+    this.dnis = new Map(); // dni -> { dir, usados }
     this.escritos = 0;
   }
 
@@ -185,37 +89,23 @@ export class EscritorCarpeta {
     if (!this.dnis.has(clave)) {
       this.dnis.set(clave, {
         dir: await this.raiz.getDirectoryHandle(clave, { create: true }),
-        sub: new Map(),
-        usados: new Map([
-          [CARPETA_JOMISER, new Set()],
-          [CARPETA_EIN, new Set()],
-        ]),
+        usados: new Set(),
       });
     }
     return this.dnis.get(clave);
   }
 
-  /** Guarda un certificado. Devuelve el nombre final del archivo. */
+  /** Guarda un certificado en <carpeta>/<DNI>/. Devuelve el nombre final. */
   async guardarItem(dni, item) {
     const ctx = await this._ctx(dni);
-    const carpeta = item.fuente === "JOMISER" ? CARPETA_JOMISER : CARPETA_EIN;
-    if (!ctx.sub.has(carpeta)) {
-      ctx.sub.set(carpeta, await ctx.dir.getDirectoryHandle(carpeta, { create: true }));
-    }
-    const nombre = unico(ctx.usados.get(carpeta), nombreDe(item));
-    await escribirArchivo(ctx.sub.get(carpeta), nombre, item.pdf);
+    const nombre = unico(ctx.usados, nombreDe(item, dni));
+    await escribirArchivo(ctx.dir, nombre, item.pdf);
     this.escritos++;
     return nombre;
   }
-
-  /** Escribe (o reescribe) el resumen del DNI. */
-  async guardarResumen(objetivo) {
-    const ctx = await this._ctx(objetivo.dni);
-    await escribirArchivo(ctx.dir, "resumen.txt", construirResumen(objetivo));
-  }
 }
 
-/** Guardado en bloque al final (para lo ya descargado en memoria). */
+/** Guardado en bloque al final (para lo que siga en memoria). */
 export async function guardarEnCarpeta(objetivos, raizDada) {
   const raiz = raizDada || (await elegirCarpeta());
   const escritor = new EscritorCarpeta(raiz);
@@ -225,8 +115,51 @@ export async function guardarEnCarpeta(objetivos, raizDada) {
       if (!it.pdf) continue;
       it.archivo = await escritor.guardarItem(obj.dni, it);
     }
-    await escritor.guardarResumen(obj);
+  }
+  return { archivos: escritor.escritos, carpeta: raiz.name };
+}
+
+/* ------------------------------------------------------------------ */
+/* Salida: ZIP                                                         */
+/* ------------------------------------------------------------------ */
+
+/** Solo los certificados, sueltos en la raiz del ZIP. */
+export async function descargarZip(objetivos, alProgreso) {
+  const zip = new JSZip();
+  const usados = new Set();
+  // con varios DNI se antepone el documento para poder distinguir de quien es
+  // cada archivo, ya que van todos juntos sin carpetas
+  const variosDnis = objetivos.length > 1;
+  let n = 0;
+
+  for (const obj of objetivos) {
+    for (const it of obj.items) {
+      if (!it.pdf) continue;
+      it.archivo = unico(usados, nombreDe(it, obj.dni, variosDnis));
+      zip.file(it.archivo, it.pdf);
+      n++;
+    }
   }
 
-  return { archivos: escritor.escritos, carpeta: raiz.name };
+  const blob = await zip.generateAsync(
+    { type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } },
+    (meta) => alProgreso?.(meta.percent)
+  );
+
+  const sello = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+  const nombre =
+    objetivos.length === 1
+      ? `certificados_${objetivos[0].dni}.zip`
+      : `certificados_${objetivos.length}_dni_${sello}.zip`;
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+
+  return { nombre, archivos: n, bytes: blob.size };
 }

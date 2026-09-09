@@ -414,70 +414,6 @@ h1 {
 }
 .row-btns .btn { flex: 1 1 0; }
 
-/* ---------------- switches ---------------- */
-
-.switches { display: grid; gap: 8px; }
-
-.sw {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 10px 11px;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r);
-  cursor: pointer;
-  background: #05090f;
-  transition: border-color 0.15s;
-}
-.sw:hover { border-color: var(--line); }
-.sw input { position: absolute; opacity: 0; pointer-events: none; }
-
-.sw-box {
-  position: relative;
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  background: #030507;
-  transition: all 0.15s;
-}
-.sw-box::after {
-  content: "";
-  position: absolute;
-  left: 5px;
-  top: 1px;
-  width: 4px;
-  height: 9px;
-  border: solid #04070c;
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg) scale(0);
-  transition: transform 0.15s;
-}
-.sw input:checked + .sw-box {
-  background: var(--gr);
-  border-color: var(--gr);
-  box-shadow: 0 0 12px rgba(0, 255, 156, 0.45);
-}
-.sw input:checked + .sw-box::after { transform: rotate(45deg) scale(1); }
-.sw input:focus-visible + .sw-box { box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.35); }
-
-.sw-txt { display: flex; flex-direction: column; line-height: 1.3; min-width: 0; }
-.sw-txt b { font-size: 12.5px; letter-spacing: 0.08em; }
-.sw-txt em { font-style: normal; font-size: 10.5px; color: var(--tx-mute); }
-
-/* ---------------- credenciales ---------------- */
-
-.cred {
-  display: grid;
-  gap: 9px;
-  margin-top: 11px;
-  padding-top: 11px;
-  border-top: 1px dashed var(--line-soft);
-}
-.hint { margin: 0; font-size: 10.5px; color: var(--tx-mute); line-height: 1.55; }
-.hint code { color: var(--cy); }
-
 /* ---------------- avisos ---------------- */
 
 .alert {
@@ -606,17 +542,6 @@ h1 {
 }
 .item:first-child { border-top: 0; }
 
-.item-src {
-  flex: 0 0 auto;
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
-  padding: 1px 6px;
-  border-radius: 2px;
-  border: 1px solid var(--line);
-  color: var(--tx-dim);
-}
-.item-src.jom { color: var(--mg); border-color: rgba(192, 132, 252, 0.4); }
-.item-src.ein { color: var(--cy); border-color: rgba(34, 211, 238, 0.4); }
 
 .item-txt { flex: 1 1 auto; min-width: 0; color: var(--tx); word-break: break-word; }
 .item-meta { font-size: 10.5px; color: var(--tx-mute); }
