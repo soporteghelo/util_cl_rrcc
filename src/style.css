@@ -546,6 +546,19 @@ h1 {
 .item-txt { flex: 1 1 auto; min-width: 0; color: var(--tx); word-break: break-word; }
 .item-meta { font-size: 10.5px; color: var(--tx-mute); }
 
+.item-origen {
+  flex: 0 0 auto;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  opacity: 0.75;
+}
+.or-JOMISER { color: var(--cy); }
+.or-EIN     { color: var(--am); }
+.or-DRIVE   { color: var(--gr); }
+
 .item-st { flex: 0 0 auto; font-size: 9.5px; letter-spacing: 0.07em; }
 .st-ok   { color: var(--gr); }
 .st-skip { color: var(--tx-mute); }

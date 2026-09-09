@@ -1,8 +1,9 @@
-# Extractor de Certificados — JOMISER + Drive
+# Extractor de Certificados — JOMISER + EIN + Drive
 
 Descarga todos los certificados de una persona (o de una lista) desde
-**JOMISER** (`aula.jomiser.com`) y, si está configurada, una **carpeta fija de
-Google Drive** con un PDF por persona (`<DNI>_<APELLIDOS NOMBRES>.pdf`).
+**JOMISER** (`aula.jomiser.com`), **EIN / WebNexa** (`Certificados > Cert. x Persona`,
+si están configuradas las credenciales) y, si está configurada, una **carpeta
+fija de Google Drive** con un PDF por persona (`<DNI>_<APELLIDOS NOMBRES>.pdf`).
 Acepta un DNI, una lista pegada o un **Excel/CSV**.
 
 App web en Vite con funciones serverless para Vercel.
@@ -24,11 +25,12 @@ App web en Vite con funciones serverless para Vercel.
 ├── api/                  funciones serverless (Node)
 │   ├── _lib/nexa.js      extracción de JOMISER
 │   ├── _lib/drive.js     extracción de la carpeta de Drive
-│   ├── search.js         POST → certificados de un DNI (JOMISER + Drive)
+│   ├── _lib/ein.js       extracción de EIN / WebNexa
+│   ├── search.js         POST → certificados de un DNI (JOMISER + EIN + Drive)
 │   └── download.js       POST → UN PDF (según su origen)
 ├── dev-server.js         emula Vercel en local
 ├── vercel.json           maxDuration 60 s
-└── escritorio/           versión antigua en Python (incluye EIN)
+└── escritorio/           versión antigua en Python
 ```
 
 > La app web vive en la **raíz del repo** a propósito: así Vercel detecta Vite y
@@ -48,20 +50,22 @@ npm i -g vercel
 vercel --prod
 ```
 
-JOMISER es una consulta pública, así que no hacen falta credenciales ni
-variables de entorno. La búsqueda en Drive es **opcional**: sin configurarla
-la app sigue funcionando solo con JOMISER.
+JOMISER es una consulta pública, así que no hace falta configurarla. **EIN y
+Drive son opcionales**: sin sus variables de entorno la app sigue funcionando
+solo con las fuentes que sí estén configuradas.
 
-### Variables de entorno (Drive, opcional)
+### Variables de entorno
 
 En **Settings → Environment Variables** de Vercel:
 
 | Variable | Valor |
 |---|---|
+| `EIN_USUARIO` | usuario de WebNexa |
+| `EIN_PASSWORD` | contraseña |
 | `DRIVE_API_KEY` | API key de Google Cloud con la Drive API habilitada |
 | `DRIVE_FOLDER_ID` | ID de la carpeta pública (el segmento tras `/folders/` en su URL) |
 
-Setup, una sola vez:
+Setup de Drive, una sola vez:
 
 1. En [Google Cloud Console](https://console.cloud.google.com/), en un
    proyecto (nuevo o existente), habilitar **Google Drive API**.
@@ -116,24 +120,6 @@ Con **varios DNI** no hay un único participante, así que el ZIP se llama
 sueltos dos personas podrían coincidir en curso y fecha y no sabrías de quién es
 cada archivo.
 
-### Carpeta del equipo
-
-Al pulsar **INICIAR EXTRACCIÓN** se abre primero el explorador para elegir la
-carpeta. Cada PDF **se escribe en disco en cuanto llega**, no al final: en lotes
-grandes no se acumula nada en memoria y lo ya descargado queda guardado aunque
-abortes a mitad. Se crea una subcarpeta por DNI para que un lote de muchas
-personas no acabe como cientos de archivos sueltos:
-
-```
-<carpeta elegida>/
-└── 71481337/
-    ├── 2026-08-28_EXCAVACIONES SUBTERRÁNEAS.pdf
-    └── 2026-08-29_TRABAJOS EN ALTURA.pdf
-```
-
-Requiere la File System Access API (Chrome/Edge de escritorio). Donde no existe
-—Firefox, Safari, móvil— la app lo detecta, no pide carpeta y ofrece el ZIP.
-
 ### Aviso al terminar
 
 Como un lote puede tardar varios minutos y sueles dejarlo en segundo plano, al
@@ -172,6 +158,30 @@ como `.xlsx` o `.csv`.
 - **Los desaprobados no tienen certificado**: se marcan `SIN CERTIFICADO`, no
   como error.
 
+## Detalles de EIN
+
+- Es un sitio ASP.NET con login (WebForms + SAP Crystal Reports), no una
+  consulta pública: hace falta `EIN_USUARIO`/`EIN_PASSWORD`.
+- **Busca por coincidencia parcial**: por ejemplo, `0350889` también devuelve
+  los certificados de `10350889`. Se descarta toda fila cuyo NDocumento no
+  sea idéntico al DNI pedido, y queda un aviso con cuántas se descartaron.
+- A diferencia de JOMISER/Drive, **no se sabe si un curso tiene certificado
+  emitido hasta intentar descargarlo** (hay que "seleccionar" la fila en el
+  visor Crystal Reports): por eso en la lista aparece como `PENDIENTE` y
+  recién al descargar se resuelve a `DESCARGADO` o `SIN CERTIFICADO`.
+- **El servidor devuelve el certificado de otra persona de forma
+  intermitente** (bug de concurrencia del reporte Crystal, ~1 de cada 4
+  descargas; pasa igual haciendo clic a mano). Cada PDF se abre, se extrae su
+  texto y se verifica que el registro `<COD><DNI>` sea el esperado; si no,
+  se reintenta.
+- El script de escritorio reintenta hasta 4 veces; la web solo **2**, porque
+  cada intento vuelve a buscar + seleccionar + exportar, y en Vercel Hobby
+  cada función tiene un límite duro de 60 s. Si un certificado agota los 2
+  intentos, queda como error y se puede reintentar ese DNI de nuevo.
+- La empresa del combo se toma **la que venga seleccionada por defecto en la
+  página** (NEXA MINERIA) — la opción "TP" del combo da error 500 en el
+  servidor, así que nunca se selecciona a propósito.
+
 ## Detalles de Drive
 
 - Busca con la **Drive API oficial** (`files.list` + API key) en vez de
@@ -201,7 +211,7 @@ Las funciones de Vercel tienen dos límites que la tarea rompe de inmediato:
 Por eso cada función hace **una operación corta**:
 
 ```
-navegador                       serverless              JOMISER / Drive
+navegador                       serverless          JOMISER / EIN / Drive
    │                                                          │
    ├── POST /api/search   ──►  consulta por DNI  ────────────►│
    │   ◄── lista de certificados (con su origen)               │
@@ -210,15 +220,15 @@ navegador                       serverless              JOMISER / Drive
    │   ◄── PDF (binario)                                      │
    │   … se repite por cada certificado                       │
    │
-   └── guarda en la carpeta elegida (o arma el ZIP)
+   └── arma el ZIP con lo descargado
 ```
 
 ---
 
 ## Versión de escritorio (`escritorio/`)
 
-App en Python + tkinter, sin dependencias. **Sigue descargando de JOMISER y de
-EIN/WebNexa**, y guarda con la estructura antigua (`<DNI>/JOMISER/`,
+App en Python + tkinter, sin dependencias. Descarga de JOMISER y de
+EIN/WebNexa, y guarda con la estructura antigua (`<DNI>/JOMISER/`,
 `<DNI>/EIN/` y `resumen.txt`).
 
 ```

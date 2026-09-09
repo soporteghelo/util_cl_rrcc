@@ -9,6 +9,7 @@
 
 import { jomiserDescargar } from "./_lib/nexa.js";
 import { driveDescargar } from "./_lib/drive.js";
+import { einDescargar } from "./_lib/ein.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -18,8 +19,20 @@ export default async function handler(req, res) {
 
   try {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
-    const pdf = body.origen === "DRIVE" ? await driveDescargar(body.id) : await jomiserDescargar(body.id);
 
+    if (body.origen === "EIN") {
+      const pdf = await einDescargar(body);
+      if (pdf === null) {
+        res.status(200).json({ sinCertificado: true, motivo: "sin certificado emitido" });
+        return;
+      }
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Length", String(pdf.length));
+      res.status(200).send(pdf);
+      return;
+    }
+
+    const pdf = body.origen === "DRIVE" ? await driveDescargar(body.id) : await jomiserDescargar(body.id);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Length", String(pdf.length));
     res.status(200).send(pdf);

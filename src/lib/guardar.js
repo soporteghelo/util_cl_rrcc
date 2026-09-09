@@ -11,7 +11,11 @@
 
 import JSZip from "jszip";
 
-export const soportaCarpeta = () => typeof window.showDirectoryPicker === "function";
+// Desactivado a proposito: la app siempre entrega ZIP al terminar, sin pedir
+// carpeta. showDirectoryPicker() depende de un dialogo nativo del SO que en
+// algunos entornos (perfiles de navegador con flags de automatizacion, etc.)
+// se autocancela sin avisar, dejando la extraccion sin poder arrancar nunca.
+export const soportaCarpeta = () => false;
 
 export function limpiarNombre(texto, max = 90) {
   return (

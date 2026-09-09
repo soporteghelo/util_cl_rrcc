@@ -12,6 +12,28 @@ import { fileURLToPath } from "node:url";
 
 const RAIZ = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(RAIZ, "dist");
+
+/**
+ * Carga .env (gitignorado) para que EIN_USUARIO/EIN_PASSWORD/DRIVE_* etc.
+ * funcionen en local igual que en Vercel, sin tener que exportarlas a mano
+ * en cada terminal. Una variable ya presente en el entorno no se pisa.
+ */
+function cargarEnv() {
+  const ruta = path.join(RAIZ, ".env");
+  if (!fs.existsSync(ruta)) return;
+  for (const linea of fs.readFileSync(ruta, "utf8").split(/\r?\n/)) {
+    const t = linea.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i < 0) continue;
+    const clave = t.slice(0, i).trim();
+    let valor = t.slice(i + 1).trim();
+    if (/^".*"$/.test(valor) || /^'.*'$/.test(valor)) valor = valor.slice(1, -1);
+    if (!(clave in process.env)) process.env[clave] = valor;
+  }
+}
+cargarEnv();
+
 const PUERTO = Number(process.env.PORT || 3000);
 
 const MIME = {

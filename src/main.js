@@ -200,6 +200,11 @@ el.logClear.addEventListener("click", () => {
 /* ------------------------------------------------------------------ */
 
 function pintarDestino() {
+  // La app siempre entrega ZIP: este bloque solo tiene sentido si algun dia
+  // se reactiva soportaCarpeta().
+  el.destRow.hidden = !soportaCarpeta();
+  if (!soportaCarpeta()) return;
+
   if (carpetaDestino) {
     el.destRow.classList.add("ok");
     el.destTxt.textContent = carpetaDestino.name;
@@ -207,10 +212,8 @@ function pintarDestino() {
     el.btnDest.textContent = "CAMBIAR";
   } else {
     el.destRow.classList.remove("ok");
-    el.destTxt.textContent = soportaCarpeta()
-      ? "sin elegir — se pedirá al iniciar"
-      : "este navegador descarga un ZIP";
-    el.btnDest.hidden = !soportaCarpeta();
+    el.destTxt.textContent = "sin elegir — se pedirá al iniciar";
+    el.btnDest.hidden = false;
   }
 }
 
@@ -352,6 +355,7 @@ function pintar() {
       const clase = it.error ? "st-err" : CLASE_ESTADO[it.estado] || "st-skip";
       const etiqueta = it.error ? "ERROR" : it.estado;
       fila.innerHTML =
+        `<span class="item-origen or-${it.origen}">${it.origen}</span>` +
         `<span class="item-txt">${it.curso} <span class="item-meta">· ${it.fecha}</span>` +
         `${it.error ? `<br><span class="item-meta">${it.error}</span>` : ""}</span>` +
         `<span class="item-st ${clase}">${etiqueta}</span>`;
@@ -466,7 +470,19 @@ async function ejecutar() {
         progreso(hecho, totalEstimado, `${obj.dni} · ${it.curso}`.slice(0, 52));
 
         try {
-          const r = await descargar({ id: it.id, origen: it.origen }, senal);
+          const r = await descargar({ id: it.id, origen: it.origen, ...(it.datosDescarga || {}) }, senal);
+
+          if (r.sinCertificado) {
+            // Algunas fuentes (EIN) no saben si hay certificado hasta intentar
+            // descargarlo: recien aca se sabe que el curso no tiene emitido.
+            it.estado = "SIN CERTIFICADO";
+            log(`  · ${it.curso}: sin certificado emitido`, "warn");
+            hecho++;
+            progreso(hecho, totalEstimado, `${obj.dni} · ${it.curso}`.slice(0, 52));
+            pintar();
+            continue;
+          }
+
           it.pdf = r.pdf;
           it.estado = "DESCARGADO";
           const kb = (r.pdf.byteLength / 1024).toFixed(0);
@@ -621,9 +637,7 @@ el.carpeta.addEventListener("click", async () => {
   const lineas = [
     "NEXA_CERT_EXTRACTOR v2.0",
     "objetivo: aula.jomiser.com",
-    soportaCarpeta()
-      ? "al iniciar se pedirá la carpeta de guardado"
-      : "este navegador descarga un ZIP (guardado en carpeta: Chrome/Edge de escritorio)",
+    "al terminar se descargará un ZIP con los certificados",
     "esperando documentos...",
   ];
   lineas.forEach((t, i) => setTimeout(() => log(t, i === 0 ? "head" : "info"), i * 190));
