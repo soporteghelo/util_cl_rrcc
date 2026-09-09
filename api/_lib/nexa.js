@@ -103,7 +103,7 @@ export function sinTags(html) {
     .trim();
 }
 
-const esPdf = (buffer) => buffer.length > 4 && buffer.subarray(0, 4).toString("latin1") === "%PDF";
+export const esPdf = (buffer) => buffer.length > 4 && buffer.subarray(0, 4).toString("latin1") === "%PDF";
 
 /* ------------------------------------------------------------------ */
 /* JOMISER                                                             */

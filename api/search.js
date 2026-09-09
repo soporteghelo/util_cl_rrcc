@@ -7,6 +7,7 @@
  */
 
 import { jomiserBuscar, normalizarDni } from "./_lib/nexa.js";
+import { driveBuscar } from "./_lib/drive.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -29,16 +30,24 @@ export default async function handler(req, res) {
       participante: "",
       items: [],
       error: null,
-      aviso: null,
+      avisos: [],
     };
 
     try {
       const r = await jomiserBuscar(norm.dni);
       salida.participante = r.participante;
-      salida.items = r.items;
-      salida.aviso = r.aviso;
+      salida.items = r.items.map((it) => ({ ...it, origen: "JOMISER" }));
+      if (r.aviso) salida.avisos.push(r.aviso);
     } catch (e) {
       salida.error = e.message;
+    }
+
+    try {
+      const r = await driveBuscar(norm.dni);
+      salida.items = salida.items.concat(r.items);
+      if (r.aviso) salida.avisos.push(r.aviso);
+    } catch (e) {
+      salida.avisos.push(e.message);
     }
 
     salida.total = salida.items.filter((i) => i.descargable).length;

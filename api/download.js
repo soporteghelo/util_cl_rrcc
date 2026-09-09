@@ -8,6 +8,7 @@
  */
 
 import { jomiserDescargar } from "./_lib/nexa.js";
+import { driveDescargar } from "./_lib/drive.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -17,7 +18,7 @@ export default async function handler(req, res) {
 
   try {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
-    const pdf = await jomiserDescargar(body.id);
+    const pdf = body.origen === "DRIVE" ? await driveDescargar(body.id) : await jomiserDescargar(body.id);
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Length", String(pdf.length));

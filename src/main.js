@@ -440,9 +440,9 @@ async function ejecutar() {
         log(`  ${inv.error}`, "err");
         registro.avisos.push(inv.error);
       }
-      if (inv.aviso) {
-        log(`  ${inv.aviso}`, "warn");
-        registro.avisos.push(inv.aviso);
+      for (const a of inv.avisos || []) {
+        log(`  ${a}`, "warn");
+        registro.avisos.push(a);
       }
 
       registro.participante = inv.participante || "";
@@ -466,7 +466,7 @@ async function ejecutar() {
         progreso(hecho, totalEstimado, `${obj.dni} · ${it.curso}`.slice(0, 52));
 
         try {
-          const r = await descargar({ id: it.id }, senal);
+          const r = await descargar({ id: it.id, origen: it.origen }, senal);
           it.pdf = r.pdf;
           it.estado = "DESCARGADO";
           const kb = (r.pdf.byteLength / 1024).toFixed(0);

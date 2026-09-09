@@ -1,8 +1,9 @@
-# Extractor de Certificados — JOMISER
+# Extractor de Certificados — JOMISER + Drive
 
 Descarga todos los certificados de una persona (o de una lista) desde
-**JOMISER** (`aula.jomiser.com`). Acepta un DNI, una lista pegada o un
-**Excel/CSV**.
+**JOMISER** (`aula.jomiser.com`) y, si está configurada, una **carpeta fija de
+Google Drive** con un PDF por persona (`<DNI>_<APELLIDOS NOMBRES>.pdf`).
+Acepta un DNI, una lista pegada o un **Excel/CSV**.
 
 App web en Vite con funciones serverless para Vercel.
 
@@ -22,8 +23,9 @@ App web en Vite con funciones serverless para Vercel.
 │       └── guardar.js    escritura en carpeta y ZIP
 ├── api/                  funciones serverless (Node)
 │   ├── _lib/nexa.js      extracción de JOMISER
-│   ├── search.js         POST → certificados de un DNI
-│   └── download.js       POST → UN PDF
+│   ├── _lib/drive.js     extracción de la carpeta de Drive
+│   ├── search.js         POST → certificados de un DNI (JOMISER + Drive)
+│   └── download.js       POST → UN PDF (según su origen)
 ├── dev-server.js         emula Vercel en local
 ├── vercel.json           maxDuration 60 s
 └── escritorio/           versión antigua en Python (incluye EIN)
@@ -47,7 +49,30 @@ vercel --prod
 ```
 
 JOMISER es una consulta pública, así que no hacen falta credenciales ni
-variables de entorno.
+variables de entorno. La búsqueda en Drive es **opcional**: sin configurarla
+la app sigue funcionando solo con JOMISER.
+
+### Variables de entorno (Drive, opcional)
+
+En **Settings → Environment Variables** de Vercel:
+
+| Variable | Valor |
+|---|---|
+| `DRIVE_API_KEY` | API key de Google Cloud con la Drive API habilitada |
+| `DRIVE_FOLDER_ID` | ID de la carpeta pública (el segmento tras `/folders/` en su URL) |
+
+Setup, una sola vez:
+
+1. En [Google Cloud Console](https://console.cloud.google.com/), en un
+   proyecto (nuevo o existente), habilitar **Google Drive API**.
+2. Crear una **API key** (Credenciales → Crear credenciales → Clave de API),
+   restringida a la Drive API. Sin restricción de referrer/IP: la llamada
+   sale desde las funciones de Vercel con IP variable.
+3. La carpeta de Drive con los certificados debe estar compartida como
+   **"Cualquiera con el enlace — Lector"**.
+4. Copiar el ID de la carpeta desde su URL
+   (`drive.google.com/drive/folders/`**`ESTE_ID`**) y cargar ambas variables
+   en Vercel.
 
 > La app queda pública al desplegarla. Si no quieres que cualquiera consulte
 > certificados, activa
@@ -147,6 +172,23 @@ como `.xlsx` o `.csv`.
 - **Los desaprobados no tienen certificado**: se marcan `SIN CERTIFICADO`, no
   como error.
 
+## Detalles de Drive
+
+- Busca con la **Drive API oficial** (`files.list` + API key) en vez de
+  raspar la página pública de la carpeta: esa página solo trae los primeros
+  50 archivos, y con más de 50 certificados un DNI "tardío" daría un falso
+  `SIN CERTIFICADO` aunque el archivo exista. La API filtra del lado de
+  Google, así que el tamaño de la carpeta no importa.
+- La búsqueda por nombre de Drive (`contains`) es por **subcadena, no por
+  prefijo**: un DNI corto podría matchear como parte de uno más largo (mismo
+  problema de coincidencia parcial que EIN, ver más abajo). Por eso el
+  código descarta cualquier resultado cuyo nombre no **arranque exacto** con
+  el DNI buscado.
+- Si no hay archivo para el DNI se marca `SIN CERTIFICADO` (no error) y
+  queda un aviso en el log de la corrida.
+- Descargar el PDF no necesita la API key: alcanza con que el archivo sea
+  público (`drive.google.com/uc?export=download&id=<id>`).
+
 ---
 
 ## Por qué el navegador dirige y no una sola función
@@ -159,10 +201,10 @@ Las funciones de Vercel tienen dos límites que la tarea rompe de inmediato:
 Por eso cada función hace **una operación corta**:
 
 ```
-navegador                       serverless                JOMISER
+navegador                       serverless              JOMISER / Drive
    │                                                          │
    ├── POST /api/search   ──►  consulta por DNI  ────────────►│
-   │   ◄── lista de certificados                              │
+   │   ◄── lista de certificados (con su origen)               │
    │                                                          │
    ├── POST /api/download ──►  1 certificado     ────────────►│
    │   ◄── PDF (binario)                                      │

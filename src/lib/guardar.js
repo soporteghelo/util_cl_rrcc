@@ -31,7 +31,9 @@ export function limpiarNombre(texto, max = 90) {
  * coincidir en curso y fecha.
  */
 export function nombreDe(item, dni, conDni = false) {
-  const base = `${item.fecha}_${item.curso}`;
+  // fecha vacia (items de Drive: el nombre ya trae todo) no debe dejar un
+  // guion bajo colgando al principio.
+  const base = [item.fecha, item.curso].filter(Boolean).join("_");
   return limpiarNombre(conDni ? `${dni}_${base}` : base) + ".pdf";
 }
 
