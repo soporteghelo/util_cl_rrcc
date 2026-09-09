@@ -322,6 +322,8 @@ const CLASE_ESTADO = {
   PENDIENTE: "st-wait",
 };
 
+const ORDEN_ORIGEN = ["JOMISER", "EIN", "DRIVE"];
+
 /** Un PDF puede estar en memoria (pdf) o ya escrito en disco (guardado). */
 const obtenido = (it) => Boolean(it.pdf || it.guardado);
 const totalObtenidos = () => resultados.reduce((n, r) => n + r.items.filter(obtenido).length, 0);
@@ -338,13 +340,27 @@ function pintar() {
     const descargados = obj.items.filter(obtenido).length;
     ok += descargados;
 
+    const carrilesHtml = ORDEN_ORIGEN.filter((o) => obj.items.some((it) => it.origen === o))
+      .map((o) => {
+        const items = obj.items.filter((it) => it.origen === o);
+        const total = items.filter((it) => it.descargable).length;
+        const resueltos = items.filter((it) => it.descargable && it.estado !== "PENDIENTE").length;
+        const activo = resueltos < total;
+        return (
+          `<span class="carril or-${o}${activo ? " activo" : ""}">` +
+          `<span class="pt"></span>${o} ${resueltos}/${total}</span>`
+        );
+      })
+      .join("");
+
     const cab = document.createElement("div");
     cab.className = "card-head";
     cab.innerHTML =
       `<span class="card-dni">${obj.dni}</span>` +
       (obj.original !== obj.dni ? `<span class="item-meta">(archivo: ${obj.original})</span>` : "") +
       `<span class="card-n">${descargados}/${obj.items.length}</span>` +
-      `<span class="card-nom">${obj.participante || "— sin registros —"}</span>`;
+      `<span class="card-nom">${obj.participante || "— sin registros —"}</span>` +
+      (carrilesHtml ? `<span class="carriles">${carrilesHtml}</span>` : "");
     card.appendChild(cab);
 
     const cont = document.createElement("div");
@@ -464,11 +480,16 @@ async function ejecutar() {
       log(`  ${registro.items.length} registro(s), ${descargables.length} descargable(s)`);
       pintar();
 
-      /* ---- descarga uno por uno ---- */
-      for (const it of descargables) {
-        if (senal.aborted) break;
+      /* ---- descarga: una fuente no espera a la otra ----
+       * Cada fuente (JOMISER/EIN/DRIVE) es un servidor distinto y no
+       * comparte nada entre si, asi que se descargan en paralelo. Dentro de
+       * una misma fuente se mantiene secuencial: EIN en particular reusa la
+       * misma sesion/cookie para cada item, y pedir dos a la vez pisaria el
+       * estado del visor Crystal en el servidor (el mismo bug de "certificado
+       * de otra persona" que ya se valida, pero peor).
+       */
+      async function descargarUnItem(it) {
         progreso(hecho, totalEstimado, `${obj.dni} · ${it.curso}`.slice(0, 52));
-
         try {
           const r = await descargar({ id: it.id, origen: it.origen, ...(it.datosDescarga || {}) }, senal);
 
@@ -476,37 +497,49 @@ async function ejecutar() {
             // Algunas fuentes (EIN) no saben si hay certificado hasta intentar
             // descargarlo: recien aca se sabe que el curso no tiene emitido.
             it.estado = "SIN CERTIFICADO";
-            log(`  · ${it.curso}: sin certificado emitido`, "warn");
-            hecho++;
-            progreso(hecho, totalEstimado, `${obj.dni} · ${it.curso}`.slice(0, 52));
-            pintar();
-            continue;
-          }
-
-          it.pdf = r.pdf;
-          it.estado = "DESCARGADO";
-          const kb = (r.pdf.byteLength / 1024).toFixed(0);
-
-          if (escritor) {
-            // se vuelca a disco ya, no se acumula en memoria
-            it.archivo = await escritor.guardarItem(obj.dni, it);
-            it.pdf = null;
-            it.guardado = true;
-            log(`  · ${it.curso}: ${kb} KB → ${it.archivo}`, "ok");
+            log(`  · [${it.origen}] ${it.curso}: sin certificado emitido`, "warn");
           } else {
-            log(`  · ${it.curso}: ${kb} KB`, "ok");
+            it.pdf = r.pdf;
+            it.estado = "DESCARGADO";
+            const kb = (r.pdf.byteLength / 1024).toFixed(0);
+
+            if (escritor) {
+              // se vuelca a disco ya, no se acumula en memoria
+              it.archivo = await escritor.guardarItem(obj.dni, it);
+              it.pdf = null;
+              it.guardado = true;
+              log(`  · [${it.origen}] ${it.curso}: ${kb} KB → ${it.archivo}`, "ok");
+            } else {
+              log(`  · [${it.origen}] ${it.curso}: ${kb} KB`, "ok");
+            }
           }
         } catch (e) {
-          if (senal.aborted) break;
-          it.error = e.message;
-          it.estado = "ERROR";
-          log(`  · ${it.curso}: ${e.message}`, "err");
+          if (!senal.aborted) {
+            it.error = e.message;
+            it.estado = "ERROR";
+            log(`  · [${it.origen}] ${it.curso}: ${e.message}`, "err");
+          }
         }
 
         hecho++;
         progreso(hecho, totalEstimado, `${obj.dni} · ${it.curso}`.slice(0, 52));
         pintar();
       }
+
+      const carriles = new Map();
+      for (const it of descargables) {
+        if (!carriles.has(it.origen)) carriles.set(it.origen, []);
+        carriles.get(it.origen).push(it);
+      }
+
+      await Promise.all(
+        [...carriles.values()].map(async (items) => {
+          for (const it of items) {
+            if (senal.aborted) break;
+            await descargarUnItem(it);
+          }
+        })
+      );
 
       hecho++;
       pintar();
