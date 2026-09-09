@@ -72,17 +72,21 @@ Con recarga en caliente: `vercel dev`, o `npm run dev` (Vite hace proxy de
 
 ### ZIP
 
-Solo los certificados, sueltos en la raíz. Sin subcarpetas y sin resumen:
+Solo los certificados, sueltos en la raíz. Sin subcarpetas y sin resumen. El ZIP
+se llama como el participante en JOMISER, más su documento:
 
 ```
-certificados_71481337.zip
+MEZA SUAZO, LUIS ANGEL_71481337.zip
 ├── 2026-08-28_EXCAVACIONES SUBTERRÁNEAS.pdf
 ├── 2026-08-29_TRABAJOS EN ALTURA.pdf
 ├── 2026-08-29_HERRAMIENTAS DE PODER.pdf
 └── 2026-08-30_SUSTANCIAS QUÍMICAS PELIGROSAS.pdf
 ```
 
-Con **varios DNI** el nombre lleva el documento delante
+Si JOMISER no devolvió nombre, el ZIP se llama `certificados_<DNI>.zip`.
+
+Con **varios DNI** no hay un único participante, así que el ZIP se llama
+`certificados_<N>_dni_<fecha>.zip` y cada archivo lleva el documento delante
 (`71481337_2026-08-28_EXCAVACIONES SUBTERRÁNEAS.pdf`), porque al ir todos
 sueltos dos personas podrían coincidir en curso y fecha y no sabrías de quién es
 cada archivo.

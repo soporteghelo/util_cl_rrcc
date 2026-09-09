@@ -123,6 +123,23 @@ export async function guardarEnCarpeta(objetivos, raizDada) {
 /* Salida: ZIP                                                         */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Nombre del ZIP. Con un solo DNI lleva el nombre del participante tal y como
+ * lo devuelve JOMISER, mas el documento (dos personas pueden llamarse igual).
+ * Si la consulta no trajo nombre, se cae al documento solo.
+ */
+export function nombreDelZip(objetivos) {
+  if (objetivos.length === 1) {
+    const obj = objetivos[0];
+    // se limpia el nombre ANTES de pegar el documento: si no, los caracteres
+    // no validos se vuelven espacios y queda un "JUAN _71481337"
+    const persona = obj.participante ? limpiarNombre(obj.participante, 100) : "";
+    return (persona ? `${persona}_${obj.dni}` : `certificados_${obj.dni}`) + ".zip";
+  }
+  const sello = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+  return `certificados_${objetivos.length}_dni_${sello}.zip`;
+}
+
 /** Solo los certificados, sueltos en la raiz del ZIP. */
 export async function descargarZip(objetivos, alProgreso) {
   const zip = new JSZip();
@@ -146,11 +163,7 @@ export async function descargarZip(objetivos, alProgreso) {
     (meta) => alProgreso?.(meta.percent)
   );
 
-  const sello = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
-  const nombre =
-    objetivos.length === 1
-      ? `certificados_${objetivos[0].dni}.zip`
-      : `certificados_${objetivos.length}_dni_${sello}.zip`;
+  const nombre = nombreDelZip(objetivos);
 
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
