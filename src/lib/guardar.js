@@ -2,8 +2,10 @@
  * Guardado de resultados.
  *
  * Dos salidas:
- *   - ZIP  -> PDFs sueltos en la raiz, sin subcarpetas ni resumen.
- *             Funciona en todos los navegadores, incluido movil.
+ *   - ZIP  -> con un solo DNI los PDF van sueltos en la raiz; con varios,
+ *             cada uno en su propia subcarpeta "NOMBRE_DNI" para no mezclar
+ *             los certificados de decenas de personas. Funciona en todos los
+ *             navegadores, incluido movil.
  *   - Carpeta real -> File System Access API (Chrome/Edge escritorio):
  *             una subcarpeta por DNI, para que un lote de varias personas no
  *             acabe como cientos de archivos sueltos.
@@ -29,16 +31,12 @@ export function limpiarNombre(texto, max = 90) {
   );
 }
 
-/**
- * Nombre del PDF. `conDni` antepone el documento: hace falta cuando todos los
- * certificados van sueltos en la misma carpeta y varias personas podrian
- * coincidir en curso y fecha.
- */
-export function nombreDe(item, dni, conDni = false) {
+/** Nombre del PDF (sin carpeta): fecha_curso, o solo curso si no hay fecha. */
+export function nombreDe(item) {
   // fecha vacia (items de Drive: el nombre ya trae todo) no debe dejar un
   // guion bajo colgando al principio.
   const base = [item.fecha, item.curso].filter(Boolean).join("_");
-  return limpiarNombre(conDni ? `${dni}_${base}` : base) + ".pdf";
+  return limpiarNombre(base) + ".pdf";
 }
 
 function unico(usados, nombre) {
@@ -104,7 +102,7 @@ export class EscritorCarpeta {
   /** Guarda un certificado en <carpeta>/<DNI>/. Devuelve el nombre final. */
   async guardarItem(dni, item) {
     const ctx = await this._ctx(dni);
-    const nombre = unico(ctx.usados, nombreDe(item, dni));
+    const nombre = unico(ctx.usados, nombreDe(item));
     await escribirArchivo(ctx.dir, nombre, item.pdf);
     this.escritos++;
     return nombre;
@@ -129,6 +127,10 @@ export async function guardarEnCarpeta(objetivos, raizDada) {
 /* Salida: ZIP                                                         */
 /* ------------------------------------------------------------------ */
 
+// se limpia el nombre ANTES de pegar el documento: si no, los caracteres no
+// validos se vuelven espacios y queda un "JUAN _71481337"
+const nombrePersona = (obj) => (obj.participante ? limpiarNombre(obj.participante, 100) : "");
+
 /**
  * Nombre del ZIP. Con un solo DNI lleva el nombre del participante tal y como
  * lo devuelve JOMISER, mas el documento (dos personas pueden llamarse igual).
@@ -137,28 +139,35 @@ export async function guardarEnCarpeta(objetivos, raizDada) {
 export function nombreDelZip(objetivos) {
   if (objetivos.length === 1) {
     const obj = objetivos[0];
-    // se limpia el nombre ANTES de pegar el documento: si no, los caracteres
-    // no validos se vuelven espacios y queda un "JUAN _71481337"
-    const persona = obj.participante ? limpiarNombre(obj.participante, 100) : "";
+    const persona = nombrePersona(obj);
     return (persona ? `${persona}_${obj.dni}` : `certificados_${obj.dni}`) + ".zip";
   }
   const sello = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
   return `certificados_${objetivos.length}_dni_${sello}.zip`;
 }
 
-/** Solo los certificados, sueltos en la raiz del ZIP. */
+/** Carpeta del dueño de los certificados dentro del ZIP: "NOMBRE_DNI". */
+function carpetaDe(obj) {
+  const persona = nombrePersona(obj);
+  return persona ? `${persona}_${obj.dni}` : obj.dni;
+}
+
+/**
+ * Los certificados de cada DNI. Con un solo documento van sueltos en la raiz;
+ * con varios, cada uno en su propia subcarpeta con el nombre del dueño (el
+ * DNI es unico en la lista, asi que la carpeta tambien lo es).
+ */
 export async function descargarZip(objetivos, alProgreso) {
   const zip = new JSZip();
-  const usados = new Set();
-  // con varios DNI se antepone el documento para poder distinguir de quien es
-  // cada archivo, ya que van todos juntos sin carpetas
   const variosDnis = objetivos.length > 1;
   let n = 0;
 
   for (const obj of objetivos) {
+    const usados = new Set();
+    const prefijo = variosDnis ? `${carpetaDe(obj)}/` : "";
     for (const it of obj.items) {
       if (!it.pdf) continue;
-      it.archivo = unico(usados, nombreDe(it, obj.dni, variosDnis));
+      it.archivo = prefijo + unico(usados, nombreDe(it));
       zip.file(it.archivo, it.pdf);
       n++;
     }
