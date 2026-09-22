@@ -27,10 +27,10 @@
         </div>
 
         <nav class="tabs" role="tablist" aria-label="Secciones">
-          <button class="tab activo" id="tab-certificados" type="button" role="tab" aria-selected="true">
+          <button class="tab" id="tab-certificados" type="button" role="tab" aria-selected="false">
             CERTIFICADOS
           </button>
-          <button class="tab" id="tab-renovacion" type="button" role="tab" aria-selected="false">
+          <button class="tab activo" id="tab-renovacion" type="button" role="tab" aria-selected="true">
             RENOVACIÓN
           </button>
           <button class="tab" id="tab-nuevo" type="button" role="tab" aria-selected="false">
@@ -50,7 +50,7 @@
       <!-- ============================================================= -->
       <!-- VISTA 1 · EXTRACTOR DE CERTIFICADOS                            -->
       <!-- ============================================================= -->
-      <div class="vista" id="vista-certificados">
+      <div class="vista" id="vista-certificados" hidden>
         <div class="col col-in">
           <section class="panel panel-obj" aria-labelledby="t-target">
             <div class="panel-head">
@@ -144,7 +144,7 @@
       <!-- ============================================================= -->
       <!-- VISTA 2 · RENOVACIÓN DE AUTORIZACIONES                        -->
       <!-- ============================================================= -->
-      <div class="vista" id="vista-renovacion" hidden>
+      <div class="vista" id="vista-renovacion">
         <div class="col col-in">
           <section class="panel panel-obj">
             <div class="panel-head">

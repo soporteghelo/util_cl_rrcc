@@ -105,6 +105,44 @@ export function cargarImagen(fuente) {
   });
 }
 
+/**
+ * Junta 1 o 2 fotos del fotocheck antiguo (anverso y reverso del carnet
+ * fisico) en una sola imagen, una debajo de la otra, para pegar en el Word.
+ * Si llega una sola, se usa tal cual: no todo carnet tiene reverso para
+ * fotografiar. Devuelve { datos, mime, ancho, alto } listo para `armarAutorizacion`.
+ */
+export async function combinarFotocheckAntiguo(archivos) {
+  const lista = Array.from(archivos || []).filter(Boolean).slice(0, 2);
+  if (!lista.length) return null;
+
+  const imagenes = (await Promise.all(lista.map((a) => cargarImagen(a)))).filter(Boolean);
+  if (!imagenes.length) throw new Error("no se pudo leer la imagen");
+
+  const ancho = Math.min(2000, Math.max(...imagenes.map((img) => img.naturalWidth || img.width)));
+  const separacion = imagenes.length > 1 ? Math.round(ancho * 0.015) || 6 : 0;
+  const altos = imagenes.map((img) => {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    return Math.round((h * ancho) / w);
+  });
+  const alto = altos.reduce((suma, h) => suma + h, 0) + separacion * Math.max(imagenes.length - 1, 0);
+
+  const lienzo = document.createElement("canvas");
+  lienzo.width = ancho;
+  lienzo.height = alto;
+  const ctx = lienzo.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, ancho, alto);
+  let y = 0;
+  imagenes.forEach((img, i) => {
+    ctx.drawImage(img, 0, y, ancho, altos[i]);
+    y += altos[i] + separacion;
+  });
+
+  const blob = await new Promise((resolver) => lienzo.toBlob(resolver, "image/png"));
+  return { datos: await blob.arrayBuffer(), mime: "image/png", ancho, alto };
+}
+
 /** Dibuja `img` dentro del rectangulo recortando lo que sobre (object-fit: cover). */
 function dibujarCubriendo(ctx, img, x, y, w, h) {
   const escala = Math.max(w / img.width, h / img.height);

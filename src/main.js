@@ -625,12 +625,15 @@ el.carpeta.addEventListener("click", async () => {
   pintarDestino();
   refrescarConteo();
 
-  montarPestanas([
-    ["tab-certificados", "vista-certificados"],
-    ["tab-renovacion", "vista-renovacion"],
-    ["tab-nuevo", "vista-nuevo"],
-    ["tab-estado", "vista-estado"],
-  ]);
+  montarPestanas(
+    [
+      ["tab-certificados", "vista-certificados"],
+      ["tab-renovacion", "vista-renovacion"],
+      ["tab-nuevo", "vista-nuevo"],
+      ["tab-estado", "vista-estado"],
+    ],
+    1, // arranca en RENOVACIÓN
+  );
   montarModalFotocheck();
 
   // La renovacion carga CONFIG y el diccionario una sola vez; el alta de

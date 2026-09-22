@@ -13,7 +13,7 @@ import { $, crearConsola, crearProgreso, notificar, pedirPermisoAviso } from "./
 import { desdeTexto, normalizarLista } from "../lib/dni.js";
 import { extraerDocumentos } from "../lib/excel.js";
 import { sheets, drive, desdeBase64, descargar, blobABase64 } from "../lib/api.js";
-import { cargarContexto, renovarPersona, consultarPersona, generarSalidas, resumenAutorizaciones, fotoDeDni, guardarFilaVerificada } from "../lib/renovacion.js";
+import { cargarContexto, renovarPersona, consultarPersona, generarSalidas, resumenAutorizaciones, fotoDeDni, guardarFilaVerificada, MIME_DOCX } from "../lib/renovacion.js";
 import {
   aFormatoCorto,
   aIso,
@@ -29,8 +29,8 @@ import {
 } from "../../shared/estados.js";
 import { colTipo, INDICE } from "../../shared/rrcc.js";
 import { autocompletar } from "./autocompletar.js";
-import { medirImagen } from "../lib/docx.js";
-import { dibujarFotocheck } from "../lib/fotocheck.js";
+import { medirImagen, armarAutorizacion } from "../lib/docx.js";
+import { dibujarFotocheck, combinarFotocheckAntiguo } from "../lib/fotocheck.js";
 import { abrirFotocheck, actualizarFotocheck, cerrarFotocheck, fotocheckAbiertoDe } from "./fotocheck-modal.js";
 
 export function normalizarCambiosPendientes(ficha, contextoExtra = {}) {
@@ -297,7 +297,7 @@ export function montarRenovacion() {
 
   /* ---------------- fotocheck en vivo ---------------- */
 
-  const opcionesFotocheck = (ficha, clave) => ({ clave, foto: ficha.foto, antiguo: ficha.antiguo, config: contexto?.config || {} });
+  const opcionesFotocheck = (ficha, clave) => ({ clave, foto: ficha.foto, antiguo: ficha.antiguoManual || ficha.antiguo, config: contexto?.config || {} });
 
   const textoBotonFotocheck = (abierto) => (abierto ? "OCULTAR FOTOCHECK" : "VER FOTOCHECK");
   const ICONO_FOTOCHECK =
@@ -336,6 +336,61 @@ export function montarRenovacion() {
     if (!ficha?.persona) return;
     abrirFotocheck(personaVisible(ficha), opcionesFotocheck(ficha, dni)).catch(() => {});
     marcarBotonesFotocheck();
+  }
+
+  /** Abre el selector nativo de archivos y devuelve lo elegido (sin tocar el DOM). */
+  function elegirImagenes({ multiple = false } = {}) {
+    return new Promise((resolver) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.multiple = multiple;
+      input.addEventListener("change", () => resolver(Array.from(input.files || [])), { once: true });
+      input.click();
+    });
+  }
+
+  /**
+   * Fotocheck antiguo adjuntado a mano: pide ANVERSO y REVERSO del carnet
+   * fisico en dos pasos separados (dos selectores, uno a la vez, cada uno
+   * con su propio aviso) y los combina en una sola imagen. Si no hay reverso
+   * para fotografiar, se puede cancelar ese segundo paso y queda solo el
+   * anverso. Reemplaza, para esta persona, lo que se hubiera bajado de Drive
+   * por FOTOCHECK_ANTIGUO_DRIVE_ID.
+   */
+  async function elegirFotocheckAntiguo(dni) {
+    const ficha = fichas.get(dni);
+    if (!ficha) return;
+
+    notificar("Fotocheck antiguo · 1/2", "Elige la foto del ANVERSO del carnet.");
+    const [anverso] = await elegirImagenes();
+    if (!anverso) return;
+
+    notificar("Fotocheck antiguo · 2/2", "Ahora elige la foto del REVERSO (cancela si no tienes).");
+    const [reverso] = await elegirImagenes();
+
+    try {
+      const combinado = await combinarFotocheckAntiguo(reverso ? [anverso, reverso] : [anverso]);
+      ficha.antiguoManual = combinado;
+      ficha.antiguo = combinado;
+      pintarFicha(dni, ficha);
+      refrescarFotocheck(dni);
+      notificar(
+        "Fotocheck antiguo listo",
+        reverso ? "Anverso y reverso combinados en una sola imagen." : "Solo se adjuntó el anverso."
+      );
+    } catch (e) {
+      notificar("No se pudo cargar el fotocheck antiguo", e.message, "warn");
+    }
+  }
+
+  function quitarFotocheckAntiguo(dni) {
+    const ficha = fichas.get(dni);
+    if (!ficha) return;
+    ficha.antiguoManual = null;
+    ficha.antiguo = null;
+    pintarFicha(dni, ficha);
+    refrescarFotocheck(dni);
   }
 
   /* ---------------- seleccion para aplicar C ---------------- */
@@ -447,7 +502,15 @@ export function montarRenovacion() {
     card.querySelector("[data-edicion-n]").textContent = `${n} cambio(s) sin guardar`;
   }
 
-  async function sincronizarFotocheckEnDrive(dni) {
+  /**
+   * Antes de abrir la carpeta, compartirla o descargarla en ZIP, la carpeta
+   * de Drive tiene que mostrar lo mismo que la ficha en pantalla: si se
+   * corrigio el EMO, el area, una fecha o el tipo (A/C) despues de la
+   * renovacion, o se adjunto el fotocheck antiguo a mano, ni el PNG ni el
+   * Word ya subidos lo reflejan. Se rehacen los dos con lo que se ve ahora y
+   * se resuben con el mismo nombre (se reemplazan en la carpeta).
+   */
+  async function sincronizarSalidaEnDrive(dni) {
     const ficha = fichas.get(dni);
     const folderId = ficha?.salida?.carpetaId || ficha?.carpetaId;
     if (!folderId || !ficha?.persona) return false;
@@ -456,16 +519,37 @@ export function montarRenovacion() {
       const persona = personaVisible(ficha);
       const foto = ficha.foto || (await fotoDeDni(persona.dni).catch(() => null));
       const png = await dibujarFotocheck(persona, { foto, escala: 3 });
-      const nombre = `FOTOCHECK_${persona.nombreCompleto || persona.dni}.png`;
-      const meta = {
+      const pngBlob = await new Promise((resolver) => png.toBlob(resolver, "image/png"));
+      const pngBase64 = await blobABase64(pngBlob);
+      const nombreBase = persona.nombreCompleto || persona.dni;
+
+      const fotocheckSubido = await drive({
         accion: "subir",
         carpetaId: folderId,
-        nombre,
+        nombre: `FOTOCHECK_${nombreBase}.png`,
         mime: "image/png",
-        datos: await blobABase64(await new Promise((resolver) => png.toBlob(resolver, "image/png"))),
-      };
-      const r = await drive(meta);
-      ficha.salida = { ...(ficha.salida || {}), carpetaId: folderId, fotocheck: r };
+        datos: pngBase64,
+      });
+
+      const antiguo = ficha.antiguoManual || ficha.antiguo || null;
+      const docx = await armarAutorizacion({
+        fotocheck: { datos: await pngBlob.arrayBuffer(), mime: "image/png" },
+        antiguo,
+        medidas: {
+          fotocheckAnchoCm: Number(contexto?.config?.FOTOCHECK_ANCHO_CM || 10),
+          fotocheckAltoCm: Number(contexto?.config?.FOTOCHECK_ALTO_CM || 8),
+          antiguoAnchoCm: Number(contexto?.config?.ANTIGUO_ANCHO_CM || 11.5),
+        },
+      });
+      const wordSubido = await drive({
+        accion: "subir",
+        carpetaId: folderId,
+        nombre: `Autorizacion_RRCC_${nombreBase}.docx`,
+        mime: MIME_DOCX,
+        datos: await blobABase64(docx),
+      });
+
+      ficha.salida = { ...(ficha.salida || {}), carpetaId: folderId, fotocheck: fotocheckSubido, word: wordSubido };
       return true;
     } catch {
       return false;
@@ -476,7 +560,7 @@ export function montarRenovacion() {
     const ficha = fichas.get(dni);
     const folderId = ficha?.salida?.carpetaId || ficha?.carpetaId;
     if (!folderId) return;
-    await sincronizarFotocheckEnDrive(dni);
+    await sincronizarSalidaEnDrive(dni);
 
     const lista = await drive({ accion: "listar", carpetaId: folderId });
     const zip = new JSZip();
@@ -699,9 +783,16 @@ export function montarRenovacion() {
     };
 
     const folderId = datos?.salida?.carpetaId || datos?.carpetaId || salida?.carpetaId;
+    const mensajeWhatsapp = folderId
+      ? encodeURIComponent(
+          `Autorización RRCC\n${persona.nombreCompleto || "—"}\nDNI ${persona.dni}\n` +
+            `https://drive.google.com/drive/folders/${folderId}`
+        )
+      : "";
     const enlace = folderId
       ? `<a class="btn btn-ghost btn-sm" href="https://drive.google.com/drive/folders/${folderId}" target="_blank" rel="noopener" data-carpeta-abrir="${dni}">ABRIR CARPETA</a>` +
-        `<button type="button" class="btn btn-ghost btn-sm" data-carpeta-zip="${dni}">DESCARGAR CARPETA</button>`
+        `<button type="button" class="btn btn-ghost btn-sm" data-carpeta-zip="${dni}">DESCARGAR CARPETA</button>` +
+        `<a class="btn btn-ghost btn-sm" href="https://wa.me/?text=${mensajeWhatsapp}" target="_blank" rel="noopener" data-carpeta-whatsapp="${dni}" title="Antes de abrir WhatsApp, actualiza el fotocheck y el Word de la carpeta con lo que se ve ahora en la ficha. El mensaje lleva el link de la carpeta, el DNI y el nombre: solo falta elegir el contacto y enviar">ENVIAR POR WHATSAPP</a>`
       : "";
 
     /* Lo que importa de un vistazo: de las "A" que la persona tiene, cuantas
@@ -726,7 +817,10 @@ export function montarRenovacion() {
       `<input type="date" data-emo-venc value="${persona.vencimientoEmo || ""}" aria-label="Vencimiento del EMO" /></label>` +
       `<label class="campo-ficha campo-area${datosEdit.area !== undefined ? " editado" : ""}" title="Área de la planilla. Se imprime en el fotocheck y se puede corregir aquí"><span>ÁREA</span>` +
       `<input type="text" id="area-${dni}" data-area value="${escaparHtml(persona.area)}" placeholder="sin área" autocomplete="off" aria-label="Área" /></label>` +
-      `<button type="button" class="btn btn-fotocheck" data-fotocheck="${dni}" aria-pressed="${fotocheckAbiertoDe(dni)}" title="Muestra el fotocheck y lo mantiene al día con las fechas y los tipos que edites">${ICONO_FOTOCHECK}<span data-texto>${textoBotonFotocheck(fotocheckAbiertoDe(dni))}</span></button></div>` +
+      `<button type="button" class="btn btn-fotocheck" data-fotocheck="${dni}" aria-pressed="${fotocheckAbiertoDe(dni)}" title="Muestra el fotocheck y lo mantiene al día con las fechas y los tipos que edites">${ICONO_FOTOCHECK}<span data-texto>${textoBotonFotocheck(fotocheckAbiertoDe(dni))}</span></button>` +
+      `<button type="button" class="btn btn-ghost btn-sm btn-antiguo" data-antiguo="${dni}" title="Pide primero el ANVERSO y luego el REVERSO del carnet físico antiguo: la app las combina en una sola imagen y va debajo del fotocheck nuevo en el Word">${datos.antiguoManual ? "ANTIGUO ✓ CAMBIAR" : "FOTOCHECK ANTIGUO"}</button>` +
+      (datos.antiguoManual ? `<button type="button" class="btn btn-ghost btn-sm" data-antiguo-quitar="${dni}" title="Quitar el fotocheck antiguo adjuntado">QUITAR</button>` : "") +
+      `</div>` +
       `<label class="aplicar-c"><span>FECHA C</span><input type="date" data-fecha-c title="Fecha de capacitación que se aplica como C a las tarjetas seleccionadas" /><button class="btn btn-warn btn-sm" data-aplicar-c disabled>APLICAR C</button></label>` +
       `<div class="edicion-barra" data-edicion${cambiosPendientes(datos) ? "" : " hidden"}>` +
       `<span data-edicion-n>${cambiosPendientes(datos)} cambio(s) sin guardar</span>` +
@@ -744,15 +838,24 @@ export function montarRenovacion() {
       (enlace ? `<div class="card-acciones">${enlace}</div>` : "");
 
     card.querySelector("[data-fotocheck]")?.addEventListener("click", () => alternarFotocheck(dni));
+    card.querySelector("[data-antiguo]")?.addEventListener("click", () => elegirFotocheckAntiguo(dni));
+    card.querySelector("[data-antiguo-quitar]")?.addEventListener("click", () => quitarFotocheckAntiguo(dni));
     card.querySelector("[data-carpeta-abrir]")?.addEventListener("click", async (ev) => {
       ev.preventDefault();
       const folderId = fichas.get(dni)?.salida?.carpetaId || fichas.get(dni)?.carpetaId;
       if (!folderId) return;
-      if (await sincronizarFotocheckEnDrive(dni)) {
-        window.open(`https://drive.google.com/drive/folders/${folderId}`, "_blank", "noopener,noreferrer");
-      } else {
-        window.open(`https://drive.google.com/drive/folders/${folderId}`, "_blank", "noopener,noreferrer");
+      if (!(await sincronizarSalidaEnDrive(dni))) {
+        notificar("No se pudo actualizar la carpeta", "Se abre igual, pero podría no traer los últimos cambios de la ficha.", "warn");
       }
+      window.open(`https://drive.google.com/drive/folders/${folderId}`, "_blank", "noopener,noreferrer");
+    });
+    card.querySelector("[data-carpeta-whatsapp]")?.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      const href = ev.currentTarget.href;
+      if (!(await sincronizarSalidaEnDrive(dni))) {
+        notificar("No se pudo actualizar la carpeta", "Se comparte igual, pero podría no traer los últimos cambios de la ficha.", "warn");
+      }
+      window.open(href, "_blank", "noopener,noreferrer");
     });
     card.querySelector("[data-carpeta-zip]")?.addEventListener("click", () => descargarCarpetaUsuario(dni));
 
@@ -1067,6 +1170,10 @@ export function montarRenovacion() {
             continue;
           }
 
+          // el fotocheck antiguo adjuntado a mano (boton de la ficha) no viene
+          // de esta corrida: se rescata de la ficha anterior para no perderlo.
+          const antiguoManual = fichas.get(obj.dni)?.antiguoManual || null;
+
           const ficha = {
             persona: r.despues,
             detalle: r.detalle,
@@ -1079,6 +1186,7 @@ export function montarRenovacion() {
             datosEdit: {},
             seleccion: new Set(),
             consulta: soloConsulta,
+            antiguoManual,
           };
           pintarFicha(obj.dni, ficha);
           if (r.resumen) {
@@ -1096,6 +1204,7 @@ export function montarRenovacion() {
               log: consola,
               senal,
               avance: (hecho, total, que) => barra.set(hechas, lista.length, `${obj.dni} · ${que}`),
+              antiguoManual,
             });
             conSalida++;
           }
@@ -1107,6 +1216,7 @@ export function montarRenovacion() {
             ficha.antiguo = ficha.salida.antiguo;
           } else {
             Object.assign(ficha, await materialFotocheck(r.despues, senal));
+            if (antiguoManual) ficha.antiguo = antiguoManual;
           }
           pintarFicha(obj.dni, ficha);
         } catch (e) {

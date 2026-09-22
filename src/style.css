@@ -397,14 +397,20 @@ h1 {
   50% { transform: translateX(4px); opacity: 1; }
 }
 
+/* Se repite mientras la fecha editable no coincida con la del certificado: una
+   sacudida marcada cada ciclo, con una pausa corta entre medio para que no
+   canse la vista pero deje claro que la discrepancia sigue sin resolverse. */
 @keyframes rrcc-vibrar {
-  0%, 100% { transform: translateX(0) rotate(0deg); box-shadow: 0 0 0 rgba(251, 191, 36, 0); }
-  15% { transform: translateX(-2px) rotate(-0.7deg); }
-  30% { transform: translateX(2px) rotate(0.7deg); }
-  45% { transform: translateX(-2px) rotate(-0.5deg); }
-  60% { transform: translateX(2px) rotate(0.5deg); }
-  75% { transform: translateX(-1px) rotate(-0.3deg); }
-  90% { transform: translateX(1px) rotate(0.3deg); }
+  0%, 9%, 100% { transform: translateX(0) rotate(0deg); box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.35), 0 0 18px rgba(251, 191, 36, 0.14); }
+  1% { transform: translateX(-4px) rotate(-1.5deg); }
+  2% { transform: translateX(4px) rotate(1.5deg); }
+  3% { transform: translateX(-4px) rotate(-1.3deg); }
+  4% { transform: translateX(4px) rotate(1.3deg); }
+  4.5% { box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.9), 0 0 26px rgba(251, 191, 36, 0.55); }
+  5% { transform: translateX(-3px) rotate(-0.9deg); }
+  6% { transform: translateX(3px) rotate(0.9deg); }
+  7% { transform: translateX(-1.5px) rotate(-0.4deg); }
+  8% { transform: translateX(1.5px) rotate(0.4deg); }
 }
 
 .btn-stop {
@@ -1194,6 +1200,20 @@ button.cert-fecha:hover, button.cert-fecha:focus-visible { background: rgba(0, 2
   .card-head-ren { grid-template-columns: minmax(0, 1fr); grid-template-areas: "nom" "res" "lista"; }
   .card-barra .aplicar-c { justify-self: start; }
 }
+@media (max-width: 480px) {
+  /* En celular, DNI + EMO + AREA + fotocheck ya no caben en una o dos lineas
+     sin recortarse. El DNI/codigo/badge son cortos y comparten la primera
+     fila; EMO, AREA y el boton de fotocheck fuerzan cada uno su propia fila
+     completa (flex-basis 100% en un contenedor con flex-wrap) para no
+     depender de calzar el ancho exacto de la pantalla. */
+  .card-barra .campo-ficha,
+  .card-barra .btn-fotocheck,
+  .card-barra .btn-antiguo,
+  .card-barra [data-antiguo-quitar] { flex: 1 1 100%; }
+  .card-barra .campo-ficha { justify-content: space-between; }
+  .campo-emo input, .campo-area input { width: 140px; }
+  .card-barra .btn-fotocheck { margin-left: 0; }
+}
 
 /* Boton del fotocheck en la cabecera de la ficha (a la derecha de la identificacion). */
 /* Boton del fotocheck: grande y con color propio para que se vea de lejos. Cerrado es
@@ -1204,12 +1224,12 @@ button.cert-fecha:hover, button.cert-fecha:focus-visible { background: rgba(0, 2
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  min-height: 44px;
-  padding: 10px 22px;
-  font-size: 12.5px;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 16px;
+  font-size: 11.5px;
   font-weight: 800;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   color: #031712;
   background: linear-gradient(135deg, var(--gr) 0%, var(--cy) 100%);
   border: 1px solid var(--gr);
@@ -1218,21 +1238,25 @@ button.cert-fecha:hover, button.cert-fecha:focus-visible { background: rgba(0, 2
   cursor: pointer;
   transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
 }
-.btn-fotocheck svg { width: 22px; height: 22px; flex: 0 0 auto; }
+.btn-fotocheck svg { width: 18px; height: 18px; flex: 0 0 auto; }
 .card-barra .btn-fotocheck:hover { transform: translateY(-1px); filter: brightness(1.1); box-shadow: 0 0 0 1px rgba(0, 255, 156, 0.5), 0 0 28px rgba(0, 255, 156, 0.55); }
 .card-barra .btn-fotocheck:active { transform: translateY(0); }
 .card-barra .btn-fotocheck:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .card-barra .btn-fotocheck[aria-pressed="true"] { color: var(--cy); background: rgba(34, 211, 238, 0.12); border-color: var(--cy); box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.3), 0 0 16px rgba(34, 211, 238, 0.35); }
 
 /* Campos editables de la ficha junto al DNI: vencimiento del EMO y area. */
-.card-barra { grid-template-columns: minmax(0, 1fr) auto; } /* la columna de FECHA C ocupa solo lo que necesita: el resto es para DNI, EMO, area y fotocheck */
+@media (min-width: 901px) {
+  /* la columna de FECHA C ocupa solo lo que necesita: el resto es para DNI, EMO, area y fotocheck.
+     Con guarda de ancho minimo para no pisar el apilado vertical de la media query de 900px. */
+  .card-barra { grid-template-columns: minmax(0, 1fr) auto; }
+}
 .card-barra .card-id { flex-wrap: wrap; row-gap: 6px; }
-.campo-ficha { position: relative; display: inline-flex; align-items: center; gap: 7px; padding: 3px 6px 3px 9px; border: 1px solid var(--line); border-radius: 3px; background: #060b12; font-size: 8.5px; font-weight: 700; letter-spacing: 0.1em; color: var(--tx-dim); white-space: nowrap; }
+.campo-ficha { position: relative; display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; padding: 3px 6px 3px 9px; border: 1px solid var(--line); border-radius: 3px; background: #060b12; font-size: 8.5px; font-weight: 700; letter-spacing: 0.1em; color: var(--tx-dim); white-space: nowrap; }
 .campo-ficha input { min-height: 28px; padding: 2px 6px; color-scheme: dark; font: inherit; font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em; color: var(--cy); background: rgba(2, 5, 9, 0.55); border: 1px solid rgba(34, 211, 238, 0.35); border-radius: 2px; }
 .campo-ficha input:focus { outline: 1px solid var(--cy); border-color: var(--cy); }
 .campo-ficha input::placeholder { color: var(--tx-mute); font-weight: 400; }
-.campo-emo input { width: 122px; }
-.campo-area input { width: 128px; }
+.campo-emo input { width: 108px; }
+.campo-area input { width: 108px; }
 .campo-ficha.editado { border-color: var(--am); box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.35); }
 .campo-area .ac-lista { min-width: 210px; right: auto; }
 
@@ -1281,9 +1305,13 @@ select.rc-tipo option { color: var(--tx); background: #05090f; }
 .rrcc-fecha input::-webkit-calendar-picker-indicator { margin: 0 0 0 2px; padding: 0; opacity: 0.7; cursor: pointer; }
 .rc-editado { outline: 1px solid var(--am); outline-offset: -1px; }
 .rc-fecha-diferente {
-  animation: rrcc-vibrar 0.38s ease-in-out 2;
+  /* Continua mientras la tarjeta tenga esta clase: JS la quita apenas la fecha
+     editable vuelve a coincidir con la del certificado (ver diferenciaFechaEditableConCertificado). */
+  animation: rrcc-vibrar 1.8s ease-in-out infinite;
   border-color: rgba(251, 191, 36, 0.9);
-  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.35), 0 0 18px rgba(251, 191, 36, 0.14);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rc-fecha-diferente { animation: none; box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.9), 0 0 26px rgba(251, 191, 36, 0.4); }
 }
 .edicion-barra { flex: 1 1 100%; order: 6; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid rgba(251, 191, 36, 0.5); border-radius: 3px; background: rgba(251, 191, 36, 0.08); font-size: 10.5px; color: #ffe6a8; }
 .edicion-barra span { margin-right: auto; }

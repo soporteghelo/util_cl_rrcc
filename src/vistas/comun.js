@@ -148,7 +148,7 @@ export function pedirPermisoAviso() {
 /* Pestanas                                                            */
 /* ------------------------------------------------------------------ */
 
-export function montarPestanas(pares) {
+export function montarPestanas(pares, inicial = 0) {
   const botones = pares.map(([idTab]) => $(idTab));
 
   function activar(indice) {
@@ -165,7 +165,7 @@ export function montarPestanas(pares) {
   }
 
   botones.forEach((boton, i) => boton?.addEventListener("click", () => activar(i)));
-  activar(0);
+  activar(inicial);
   return activar;
 }
 

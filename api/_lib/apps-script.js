@@ -74,6 +74,10 @@ export async function pedirAppsScript(servicio, cuerpo) {
     e.ambiguo = true; // la ejecucion pudo haber ocurrido: quien escribe debe verificarlo
     throw e;
   }
-  if (!r.ok || datos.ok === false || datos.error) throw new Error(datos.error || `Apps Script respondio HTTP ${r.status}`);
+  // `ok:false` sin `error` es un resultado valido (p.ej. fotoDe: {ok:false,encontrada:false}):
+  // no es una falla del puente, y quien llama ya sabe leer ese campo. Solo se
+  // relanza cuando el HTTP fallo o Code.gs de verdad atrapo una excepcion (esa
+  // rama siempre pone `error`).
+  if (!r.ok || datos.error) throw new Error(datos.error || `Apps Script respondio HTTP ${r.status}`);
   return datos;
 }

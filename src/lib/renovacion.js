@@ -19,7 +19,7 @@ import { construirDiccionario, renovarFila, copiarFila, leerFila, filaNueva, tip
 import { fotocheckPng } from "./fotocheck.js";
 import { armarAutorizacion, medirImagen } from "./docx.js";
 
-const MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+export const MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 /* ------------------------------------------------------------------ */
 /* Contexto (se carga una vez por corrida)                             */
@@ -223,7 +223,7 @@ export async function consultarPersona(dni, ctx, opciones = {}) {
  *   - el PNG del fotocheck nuevo,
  *   - el Word con el fotocheck nuevo (10 x 8 cm) y la foto del antiguo.
  */
-export async function generarSalidas(resultado, ctx, { log = () => {}, senal, avance = () => {} } = {}) {
+export async function generarSalidas(resultado, ctx, { log = () => {}, senal, avance = () => {}, antiguoManual = null } = {}) {
   const persona = resultado.despues;
   const nombre = nombreCarpeta(persona, ctx.config);
 
@@ -233,9 +233,17 @@ export async function generarSalidas(resultado, ctx, { log = () => {}, senal, av
 
   const salida = { carpetaId: carpeta.carpetaId, nombre, certificados: [], fotocheck: null, word: null, fallos: [] };
 
-  /* --- certificados vigentes --- */
+  /* --- certificados vigentes ---
+   * Solo los "C" (capacitados: el riesgo exige el certificado en la carpeta).
+   * Los "A" (autorizados por regla de las "A", sin exigir el PDF) y los de
+   * origen EIN quedan fuera de la carpeta de salida a pedido del area. */
   const vigentes = resultado.detalle.filter(
-    (d) => d.estado === "VIGENTE" && d.certificado && d.certificado.descargable
+    (d) =>
+      d.estado === "VIGENTE" &&
+      d.tipo === "C" &&
+      d.certificado &&
+      d.certificado.descargable &&
+      d.certificado.origen !== "EIN"
   );
   log(`${vigentes.length} certificado(s) vigente(s) para subir`);
 
@@ -272,9 +280,10 @@ export async function generarSalidas(resultado, ctx, { log = () => {}, senal, av
 
   /* --- el PDF consolidado de Drive, si lo hay ---
    * No es de ningun curso, asi que no entra en la grilla de riesgos, pero es
-   * un certificado de la persona y va en su carpeta igual. */
+   * un certificado de la persona y va en su carpeta igual. La reinduccion
+   * (origen INDUCCION) queda fuera de la carpeta a pedido del area. */
   for (const item of resultado.personales || []) {
-    if (senal?.aborted || !item.descargable) continue;
+    if (senal?.aborted || !item.descargable || item.origen === "INDUCCION") continue;
     try {
       const r = await descargar({ id: item.id, origen: item.origen, ...(item.datosDescarga || {}) }, senal);
       if (r.sinCertificado) continue;
@@ -317,11 +326,15 @@ export async function generarSalidas(resultado, ctx, { log = () => {}, senal, av
   );
   log(`fotocheck subido (${png.ancho}x${png.alto} px)`, "ok");
 
-  /* --- Word de autorizacion --- */
-  const antiguo = await fotoAntigua(persona.fotocheckAntiguoDriveId, senal).catch((e) => {
-    log(`  sin foto del fotocheck antiguo: ${e.message}`, "warn");
-    return null;
-  });
+  /* --- Word de autorizacion ---
+   * Si se adjunto a mano desde la ficha (boton "fotocheck antiguo"), esa
+   * imagen manda y no se vuelve a pedir la de Drive. */
+  const antiguo =
+    antiguoManual ||
+    (await fotoAntigua(persona.fotocheckAntiguoDriveId, senal).catch((e) => {
+      log(`  sin foto del fotocheck antiguo: ${e.message}`, "warn");
+      return null;
+    }));
 
   const docx = await armarAutorizacion({
     fotocheck: { datos: await png.blob.arrayBuffer(), mime: "image/png" },
