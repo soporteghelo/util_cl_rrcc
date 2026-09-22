@@ -404,6 +404,7 @@ export function montarRenovacion() {
       notificar("Fotocheck antiguo listo", detalle);
       return;
     }
+    ficha.salidaDesactualizada = true; // el antiguo cambio: forzar la resubida aunque nada mas haya cambiado
     const ok = await sincronizarSalidaEnDrive(dni);
     notificar(
       ok ? "Fotocheck antiguo guardado" : "Fotocheck antiguo listo, pero no se pudo actualizar la carpeta",
@@ -488,6 +489,7 @@ export function montarRenovacion() {
 
   function editar(dni, card, codigo, cambio) {
     const ficha = fichas.get(dni);
+    ficha.salidaDesactualizada = true;
     const base = baseRiesgo(ficha, codigo);
     const actual = { ...(ficha.ediciones?.[codigo] || {}), ...cambio };
     if (actual.tipo === base.tipo) delete actual.tipo;
@@ -530,11 +532,17 @@ export function montarRenovacion() {
    * renovacion, o se adjunto el fotocheck antiguo a mano, ni el PNG ni el
    * Word ya subidos lo reflejan. Se rehacen los dos con lo que se ve ahora y
    * se resuben con el mismo nombre (se reemplazan en la carpeta).
+   *
+   * `ficha.salidaDesactualizada` evita resubir cuando no hace falta: sin eso,
+   * cada clic en ABRIR CARPETA / WHATSAPP / DESCARGAR volvia a dibujar el
+   * fotocheck, armar el Word y hacer dos subidas a Apps Script (lento) aunque
+   * nada hubiera cambiado desde la ultima vez.
    */
   async function sincronizarSalidaEnDrive(dni) {
     const ficha = fichas.get(dni);
     const folderId = ficha?.salida?.carpetaId || ficha?.carpetaId;
     if (!folderId || !ficha?.persona) return false;
+    if (!ficha.salidaDesactualizada) return true;
 
     try {
       const persona = personaVisible(ficha);
@@ -571,10 +579,11 @@ export function montarRenovacion() {
       });
 
       ficha.salida = { ...(ficha.salida || {}), carpetaId: folderId, fotocheck: fotocheckSubido, word: wordSubido };
+      ficha.salidaDesactualizada = false;
       return true;
     } catch (e) {
       consola(`  no se pudo actualizar el fotocheck/Word de ${dni} en Drive: ${e.message}`, "err");
-      return false;
+      return false; // sigue desactualizada: se reintenta en el proximo abrir/compartir/descargar
     }
   }
 
@@ -607,6 +616,7 @@ export function montarRenovacion() {
   /** Anota (o retira) una correccion del EMO o del area y refresca lo que depende de ella. */
   function editarDatos(dni, card, cambio) {
     const ficha = fichas.get(dni);
+    ficha.salidaDesactualizada = true;
     const base = datosBase(ficha);
     const actual = { ...(ficha.datosEdit || {}), ...cambio };
     for (const k of Object.keys(actual)) if (actual[k] === base[k]) delete actual[k];
@@ -1086,6 +1096,7 @@ export function montarRenovacion() {
       ficha.valores = guardado.valores;
       ficha.persona = leerFila(guardado.valores);
       ficha.seleccion = new Set();
+      ficha.salidaDesactualizada = true;
       fichas.set(dni, ficha);
       pintarFicha(dni, ficha);
       confirmarGuardado(guardado, elegidas, `C aplicada a ${elegidas.length} tarjeta(s)${fecha ? ` con fecha ${aFormatoCorto(fecha)}` : " (campos limpiados)"}`);
