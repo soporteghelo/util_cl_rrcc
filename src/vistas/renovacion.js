@@ -357,6 +357,10 @@ export function montarRenovacion() {
    * para fotografiar, se puede cancelar ese segundo paso y queda solo el
    * anverso. Reemplaza, para esta persona, lo que se hubiera bajado de Drive
    * por FOTOCHECK_ANTIGUO_DRIVE_ID.
+   *
+   * Si la persona ya tiene carpeta en Drive, el Word se resube al toque: no
+   * se espera a que despues se abra/comparta/descargue la carpeta, que es
+   * cuando antes se sincronizaba (y es facil no llegar a hacerlo nunca).
    */
   async function elegirFotocheckAntiguo(dni) {
     const ficha = fichas.get(dni);
@@ -375,22 +379,39 @@ export function montarRenovacion() {
       ficha.antiguo = combinado;
       pintarFicha(dni, ficha);
       refrescarFotocheck(dni);
-      notificar(
-        "Fotocheck antiguo listo",
-        reverso ? "Anverso y reverso combinados en una sola imagen." : "Solo se adjuntó el anverso."
-      );
+      await sincronizarSiHayCarpeta(dni, reverso ? "Anverso y reverso combinados en una sola imagen." : "Solo se adjuntó el anverso.");
     } catch (e) {
       notificar("No se pudo cargar el fotocheck antiguo", e.message, "warn");
     }
   }
 
-  function quitarFotocheckAntiguo(dni) {
+  async function quitarFotocheckAntiguo(dni) {
     const ficha = fichas.get(dni);
     if (!ficha) return;
     ficha.antiguoManual = null;
     ficha.antiguo = null;
     pintarFicha(dni, ficha);
     refrescarFotocheck(dni);
+    await sincronizarSiHayCarpeta(dni, "Se quitó el fotocheck antiguo.");
+  }
+
+  /** Tras cambiar el fotocheck antiguo, resube el Word si la persona ya tiene
+      carpeta en Drive; si no la tiene todavia, no hay nada que actualizar. */
+  async function sincronizarSiHayCarpeta(dni, detalle) {
+    const ficha = fichas.get(dni);
+    const folderId = ficha?.salida?.carpetaId || ficha?.carpetaId;
+    if (!folderId) {
+      notificar("Fotocheck antiguo listo", detalle);
+      return;
+    }
+    const ok = await sincronizarSalidaEnDrive(dni);
+    notificar(
+      ok ? "Fotocheck antiguo guardado" : "Fotocheck antiguo listo, pero no se pudo actualizar la carpeta",
+      ok
+        ? `${detalle} El Word de la carpeta ya lo tiene.`
+        : "Se actualizará al abrir, compartir o descargar la carpeta.",
+      ok ? "ok" : "warn"
+    );
   }
 
   /* ---------------- seleccion para aplicar C ---------------- */
@@ -551,7 +572,8 @@ export function montarRenovacion() {
 
       ficha.salida = { ...(ficha.salida || {}), carpetaId: folderId, fotocheck: fotocheckSubido, word: wordSubido };
       return true;
-    } catch {
+    } catch (e) {
+      consola(`  no se pudo actualizar el fotocheck/Word de ${dni} en Drive: ${e.message}`, "err");
       return false;
     }
   }
