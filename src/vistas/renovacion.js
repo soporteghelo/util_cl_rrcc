@@ -78,9 +78,7 @@ export function montarRenovacion() {
     limpiar: $("rn-limpiar"),
     aviso: $("rn-aviso"),
     run: $("rn-run"),
-    consultar: $("rn-consultar"),
     stop: $("rn-stop"),
-    setup: $("rn-setup"),
     salidas: $("rn-salidas"),
     escribir: $("rn-escribir"),
     panel: $("rn-panel-res"),
@@ -93,8 +91,6 @@ export function montarRenovacion() {
   let abortador = null;
   let contexto = null;
   const fichas = new Map(); // dni -> { persona, foto, antiguo }
-  let temporizadorConsulta = null;
-  let ultimoAutoConsultado = "";
 
   /* ---------------- entrada ---------------- */
 
@@ -103,27 +99,11 @@ export function montarRenovacion() {
   function refrescar() {
     el.count.textContent = `${objetivos().length} DNI`;
   }
-  el.dnis.addEventListener("input", () => {
-    refrescar();
-    clearTimeout(temporizadorConsulta);
-    const lista = objetivos();
-    const dni = lista.length === 1 ? lista[0].dni : "";
-    if (!dni) ultimoAutoConsultado = "";
-    if (!dni || dni === ultimoAutoConsultado || corriendo) return;
-
-    // Al pegar o terminar de escribir un DNI se hace una consulta segura:
-    // compara, pero nunca guarda en Sheets ni crea salidas en Drive.
-    temporizadorConsulta = setTimeout(() => {
-      if (corriendo || objetivos().length !== 1 || objetivos()[0].dni !== dni) return;
-      ultimoAutoConsultado = dni;
-      ejecutar({ soloConsulta: true });
-    }, 550);
-  });
+  el.dnis.addEventListener("input", refrescar);
 
   el.limpiar.addEventListener("click", () => {
     el.dnis.value = "";
     el.aviso.hidden = true;
-    ultimoAutoConsultado = "";
     refrescar();
     el.dnis.focus();
   });
@@ -166,23 +146,6 @@ export function montarRenovacion() {
       return false;
     }
   }
-
-  el.setup.addEventListener("click", async () => {
-    el.setup.disabled = true;
-    consola.cabecera("CONFIGURANDO LA BASE");
-    try {
-      const r = await sheets({ accion: "setup" });
-      if (r.creadas?.length) consola(`hojas creadas: ${r.creadas.join(", ")}`, "ok");
-      for (const linea of r.hecho || []) consola(linea, "ok");
-      if (!r.creadas?.length && !r.hecho?.length) consola("ya estaba todo listo", "info");
-      await comprobarBase();
-    } catch (e) {
-      consola(`no se pudo configurar: ${e.message}`, "err");
-      if (e.detalle?.faltan) consola(`faltan variables: ${e.detalle.faltan.join(", ")}`, "warn");
-    } finally {
-      el.setup.disabled = false;
-    }
-  });
 
   /* ---------------- pintado ---------------- */
 
@@ -1175,7 +1138,6 @@ export function montarRenovacion() {
     const senal = abortador.signal;
 
     el.run.disabled = true;
-    el.consultar.disabled = true;
     el.stop.hidden = false;
     barra.mostrar(true);
     consola.limpiar();
@@ -1309,7 +1271,6 @@ export function montarRenovacion() {
     } finally {
       corriendo = false;
       el.run.disabled = false;
-      el.consultar.disabled = false;
       el.stop.hidden = true;
     }
   }
@@ -1343,11 +1304,6 @@ export function montarRenovacion() {
     if (corriendo) return;
     pedirPermisoAviso();
     ejecutar({ soloConsulta: false });
-  });
-
-  el.consultar.addEventListener("click", () => {
-    if (corriendo) return;
-    ejecutar({ soloConsulta: true });
   });
 
   // Enter en el cuadro de documentos = consultar: es lo que se hace mas
