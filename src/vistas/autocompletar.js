@@ -129,15 +129,18 @@ export function autocompletar(campo, { obtener, nombre = "opciones", max = 60 } 
 
   function abrir() {
     const todas = obtener() || [];
-    if (!todas.length) return cerrar();
     const texto = campo.value;
     const encontradas = filtrarOpciones(todas, texto);
     mostradas = encontradas.slice(0, max);
     activa = -1;
 
     const resumen = texto.trim()
-      ? `${encontradas.length} de ${todas.length} ${nombre}`
-      : `${todas.length} ${nombre} · escribe para filtrar`;
+      ? todas.length
+        ? `${encontradas.length} de ${todas.length} ${nombre}`
+        : `sin coincidencias en la matriz · se usará lo que escribas`
+      : todas.length
+        ? `${todas.length} ${nombre} · escribe para filtrar`
+        : `sin opciones en la matriz · escribe libremente`;
     const resto = encontradas.length - mostradas.length;
     lista.innerHTML =
       `<li class="ac-info" role="presentation">${resumen}</li>` +

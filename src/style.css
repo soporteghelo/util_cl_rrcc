@@ -182,12 +182,19 @@ h1 {
   background: rgba(34, 211, 238, 0.07);
   letter-spacing: 0.06em;
   white-space: nowrap;
+  text-decoration: none;
 }
 
 .tag-btn {
   cursor: pointer;
   font: inherit;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.tag-btn, a.tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .tag-btn:hover { color: #eafcff; border-color: var(--cy); background: rgba(34, 211, 238, 0.16); }
 .tag-btn:disabled { cursor: wait; opacity: 0.6; }

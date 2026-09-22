@@ -276,6 +276,14 @@ export function montarNuevo({ obtenerContexto } = {}) {
     catalogo = { cargos, areas };
   }
 
+  function cargosDeMatriz(matriz = []) {
+    return [...new Set(matriz.map((fila) => String(fila?.[0] ?? "").trim()).filter(Boolean))].sort();
+  }
+
+  function areasDeMatriz(matriz = []) {
+    return [...new Set(matriz.map((fila) => String(fila?.[1] ?? "").trim()).filter(Boolean))].sort();
+  }
+
   autocompletar(el.cargo, { obtener: () => catalogo.cargos, nombre: "cargos" });
   autocompletar(el.area, { obtener: () => catalogo.areas, nombre: "areas" });
 
@@ -288,19 +296,16 @@ export function montarNuevo({ obtenerContexto } = {}) {
       consola("cargando cargos y matriz…");
     }
 
-    // Los cargos y la matriz no dependen entre si: se piden a la vez y cada
-    // uno se usa en cuanto llega.
-    const cargos = sheets({ accion: "cargos" })
-      .then((catalogo) => {
-        // Si no cambio nada no se repinta: podria cerrar un desplegable abierto.
-        if (JSON.stringify(catalogo) !== JSON.stringify(guardado)) pintarCatalogo(catalogo);
-        guardarCatalogo(catalogo);
-        consola(`${catalogo.cargos.length} cargo(s) y ${catalogo.areas.length} area(s) conocidas`, "ok");
-      })
-      .catch((e) => consola(`no se pudieron cargar los cargos: ${e.message}`, "warn"));
-
     const matriz = (async () => {
       contexto = (await obtenerContexto?.()) || (await cargarContexto());
+      const cargos = cargosDeMatriz(contexto?.matriz || []);
+      const areas = areasDeMatriz(contexto?.matriz || []);
+      const siguiente = { cargos, areas };
+
+      if (JSON.stringify(siguiente) !== JSON.stringify(guardado)) pintarCatalogo(siguiente);
+      guardarCatalogo(siguiente);
+      consola(`${cargos.length} cargo(s) y ${areas.length} area(s) de la matriz`, "ok");
+
       if (!contexto.matriz?.length) {
         consola("la hoja MATRIZ_PUESTO está vacía: marca las A a mano", "warn");
       } else if (el.cargo.value.trim()) {
@@ -308,7 +313,7 @@ export function montarNuevo({ obtenerContexto } = {}) {
       }
     })().catch((e) => consola(`no se pudo cargar la matriz: ${e.message}`, "warn"));
 
-    await Promise.all([cargos, matriz]);
+    await matriz;
     el.cargo.placeholder = el.area.placeholder = "";
   }
 

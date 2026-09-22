@@ -261,6 +261,27 @@ el.toastX.addEventListener("click", () => {
 /* ------------------------------------------------------------------ */
 
 const CLAVE_SHEETS = "EVEREST";
+const SHEETS_LINK_ID = "sheets-link";
+
+function mostrarLinkSheets(url) {
+  const existente = document.getElementById(SHEETS_LINK_ID);
+  if (existente) {
+    existente.href = url;
+    existente.textContent = "ABRIR BASE EN SHEETS ↗";
+    existente.hidden = false;
+    return;
+  }
+
+  const enlace = document.createElement("a");
+  enlace.id = SHEETS_LINK_ID;
+  enlace.className = "tag tag-btn";
+  enlace.href = url;
+  enlace.target = "_blank";
+  enlace.rel = "noopener noreferrer";
+  enlace.textContent = "ABRIR BASE EN SHEETS ↗";
+  enlace.title = "Abrir la base en Google Sheets en otra pestaña";
+  el.btnSheets?.insertAdjacentElement("afterend", enlace);
+}
 
 el.btnSheets?.addEventListener("click", async () => {
   const clave = window.prompt("Contraseña para abrir la base en Google Sheets:");
@@ -270,18 +291,15 @@ el.btnSheets?.addEventListener("click", async () => {
     return;
   }
 
-  // La pestaña se abre YA, dentro del gesto del usuario (sync, antes de
-  // cualquier await): si se abre despues de la respuesta del servidor el
-  // navegador la trata como popup no solicitado y la bloquea.
-  const ventana = window.open("", "_blank", "noopener");
   el.btnSheets.disabled = true;
   try {
     const r = await sheets({ accion: "comprobar" });
     if (!r.spreadsheet) throw new Error("el servidor no devolvió el ID del Spreadsheet");
-    if (ventana) ventana.location = `https://docs.google.com/spreadsheets/d/${r.spreadsheet}/edit`;
-    else window.open(`https://docs.google.com/spreadsheets/d/${r.spreadsheet}/edit`, "_blank", "noopener");
+
+    const url = `https://docs.google.com/spreadsheets/d/${r.spreadsheet}/edit`;
+    mostrarLinkSheets(url);
+    notificar("Enlace disponible", "Haz clic en el link para abrir la base en otra pestaña.", "ok");
   } catch (e) {
-    ventana?.close();
     notificar("No se pudo abrir el Sheets", e.message, "warn");
   } finally {
     el.btnSheets.disabled = false;
