@@ -234,13 +234,12 @@ export async function generarSalidas(resultado, ctx, { log = () => {}, senal, av
   const salida = { carpetaId: carpeta.carpetaId, nombre, certificados: [], fotocheck: null, word: null, fallos: [] };
 
   /* --- certificados vigentes ---
-   * Solo los "C" (capacitados: el riesgo exige el certificado en la carpeta).
-   * Los "A" (autorizados por regla de las "A", sin exigir el PDF) y los de
-   * origen EIN quedan fuera de la carpeta de salida a pedido del area. */
+   * Tanto "A" (autorizados) como "C" (capacitados) suben su PDF si esta
+   * vigente y se puede descargar. Los de origen EIN quedan fuera de la
+   * carpeta de salida a pedido del area. */
   const vigentes = resultado.detalle.filter(
     (d) =>
       d.estado === "VIGENTE" &&
-      d.tipo === "C" &&
       d.certificado &&
       d.certificado.descargable &&
       d.certificado.origen !== "EIN"
