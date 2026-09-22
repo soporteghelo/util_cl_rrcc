@@ -9,7 +9,7 @@
  */
 
 import JSZip from "jszip";
-import { $, crearConsola, crearProgreso, notificar, pedirPermisoAviso } from "./comun.js";
+import { $, crearConsola, crearProgreso, notificar, pedirPermisoAviso, copiarTexto } from "./comun.js";
 import { desdeTexto, normalizarLista } from "../lib/dni.js";
 import { extraerDocumentos } from "../lib/excel.js";
 import { sheets, drive, desdeBase64, descargar, blobABase64 } from "../lib/api.js";
@@ -783,12 +783,11 @@ export function montarRenovacion() {
     };
 
     const folderId = datos?.salida?.carpetaId || datos?.carpetaId || salida?.carpetaId;
-    const mensajeWhatsapp = folderId
-      ? encodeURIComponent(
-          `Autorización RRCC\n${persona.nombreCompleto || "—"}\nDNI ${persona.dni}\n` +
-            `https://drive.google.com/drive/folders/${folderId}`
-        )
+    const textoWhatsapp = folderId
+      ? `Autorización RRCC\n${persona.nombreCompleto || "—"}\nDNI ${persona.dni}\n` +
+        `https://drive.google.com/drive/folders/${folderId}`
       : "";
+    const mensajeWhatsapp = encodeURIComponent(textoWhatsapp);
     const enlace = folderId
       ? `<a class="btn btn-ghost btn-sm" href="https://drive.google.com/drive/folders/${folderId}" target="_blank" rel="noopener" data-carpeta-abrir="${dni}">ABRIR CARPETA</a>` +
         `<button type="button" class="btn btn-ghost btn-sm" data-carpeta-zip="${dni}">DESCARGAR CARPETA</button>` +
@@ -855,7 +854,24 @@ export function montarRenovacion() {
       if (!(await sincronizarSalidaEnDrive(dni))) {
         notificar("No se pudo actualizar la carpeta", "Se comparte igual, pero podría no traer los últimos cambios de la ficha.", "warn");
       }
-      window.open(href, "_blank", "noopener,noreferrer");
+      // El navegador suele bloquear window.open() aca porque ya pasamos por un
+      // await (sincronizarSalidaEnDrive): para cuando se llama, el clic que lo
+      // habilitaba ya no cuenta como gesto del usuario. Si lo bloquea, se copia
+      // el mensaje para que se pueda pegar y compartir a mano.
+      let ventana = null;
+      try {
+        ventana = window.open(href, "_blank", "noopener,noreferrer");
+      } catch {
+        ventana = null;
+      }
+      if (!ventana) {
+        const copiado = await copiarTexto(textoWhatsapp);
+        notificar(
+          copiado ? "WhatsApp no se pudo abrir" : "No se pudo abrir WhatsApp ni copiar el mensaje",
+          copiado ? "Se copió el mensaje: pégalo donde quieras compartirlo." : "Copia a mano el enlace de la carpeta.",
+          "warn"
+        );
+      }
     });
     card.querySelector("[data-carpeta-zip]")?.addEventListener("click", () => descargarCarpetaUsuario(dni));
 

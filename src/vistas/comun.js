@@ -170,6 +170,37 @@ export function montarPestanas(pares, inicial = 0) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Portapapeles                                                        */
+/* ------------------------------------------------------------------ */
+
+/** Copia texto al portapapeles. Recurre a un textarea oculto si la API
+    asincrona no esta disponible (contexto no seguro, navegador viejo). */
+export async function copiarTexto(texto) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(texto);
+      return true;
+    }
+  } catch {
+    /* se intenta el metodo de respaldo */
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = texto;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.focus();
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Descargas                                                           */
 /* ------------------------------------------------------------------ */
 
