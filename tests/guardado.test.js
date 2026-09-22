@@ -91,6 +91,32 @@ test("Apps Script: un error que SI viene en JSON es real y no se reintenta", asy
   });
 });
 
+const HELLO_DOGET = { ok: true, servicio: "RRCC Apps Script", version: 1 };
+
+test('Apps Script: el "hello" fijo de doGet en vez de la respuesta pedida se reintenta y la siguiente que si contesta gana', async () => {
+  // Pasa cuando dos pedidos casi simultaneos saturan el Web App: llega HTTP
+  // 200 con JSON valido, pero es el "hello" de doGet, no lo que se pidio.
+  const respuestas = [respuesta(HELLO_DOGET), respuesta({ ok: true, fila: 12 })];
+  let llamadas = 0;
+  await conFetch(async () => respuestas[llamadas++], async () => {
+    const r = await pedirAppsScript("sheets", { accion: "guardar" });
+    assert.equal(r.fila, 12);
+    assert.equal(llamadas, 2);
+  });
+});
+
+test('Apps Script: si todos los intentos devuelven el "hello" de doGet, el error queda marcado como ambiguo', async () => {
+  let llamadas = 0;
+  await conFetch(async () => (llamadas++, respuesta(HELLO_DOGET)), async () => {
+    await assert.rejects(pedirAppsScript("sheets", { accion: "listado" }), (e) => {
+      assert.equal(e.ambiguo, true);
+      assert.match(e.message, /hello.*doGet/);
+      return true;
+    });
+    assert.equal(llamadas, 3);
+  });
+});
+
 /* ---- guardarFilaVerificada: se simula /api/sheets ---- */
 
 /** `comportamiento(cuerpo)` devuelve lo que responde el servidor, o un Error para un HTTP 502. */

@@ -39,9 +39,15 @@
           <button class="tab" id="tab-estado" type="button" role="tab" aria-selected="false">
             ESTADO RRCC
           </button>
+          <button class="tab" id="tab-estado-total" type="button" role="tab" aria-selected="false">
+            ESTADO TOTAL
+          </button>
         </nav>
 
         <div class="head-r">
+          <button class="tag tag-btn" id="btn-sheets" type="button" title="Abrir la base en Google Sheets (pide contraseña)">
+            SHEETS ↗
+          </button>
           <span class="tag" id="estado-base" title="Estado de la base en Google Sheets">BASE ?</span>
           <span class="head-ver">v3.0</span>
         </div>
@@ -392,6 +398,15 @@
                 <div class="msel-panel" role="listbox" aria-multiselectable="true" hidden></div>
               </div>
 
+              <label class="lbl" for="es-trabajador-btn">Estado del trabajador</label>
+              <div class="msel" id="es-trabajador">
+                <button class="inp msel-btn" id="es-trabajador-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="msel-txt">TODOS</span>
+                  <span class="msel-car">▾</span>
+                </button>
+                <div class="msel-panel" role="listbox" aria-multiselectable="true" hidden></div>
+              </div>
+
               <label class="lbl">Orden</label>
               <button class="btn btn-ghost" id="es-orden" type="button" aria-pressed="false"></button>
 
@@ -433,6 +448,86 @@
             </div>
             <div class="panel-body panel-body-flush">
               <div class="term" id="es-term" role="log" aria-live="polite"></div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- ============================================================= -->
+      <!-- VISTA 5 · ESTADO TOTAL (vencidos y activos, con dashboard)     -->
+      <!-- ============================================================= -->
+      <div class="vista" id="vista-estado-total" hidden>
+        <div class="col col-in">
+          <section class="panel panel-obj">
+            <div class="panel-head">
+              <h2>01 · FILTROS</h2>
+              <span class="count" id="et-count">0 personas</span>
+            </div>
+            <div class="panel-body panel-body-col">
+              <label class="lbl" for="et-buscar">Buscar (nombre, DNI, área, cargo)</label>
+              <input
+                class="inp"
+                id="et-buscar"
+                type="search"
+                autocomplete="off"
+                placeholder="ej. LOPEZ, 71481337, MINA"
+              />
+
+              <label class="lbl">Orden</label>
+              <button class="btn btn-ghost" id="et-orden" type="button" aria-pressed="false"></button>
+
+              <div class="avisos">
+                <div class="alert alert-info">
+                  Trae a todo el personal y muestra solo a quienes tienen ESTADO_FINAL = VENCIDO y siguen
+                  ACTIVOS: ya perdieron al menos una autorización de riesgo crítico. Haz clic en una fila
+                  para ver el detalle de qué RRCC tiene vencido y/o por vencer.
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel panel-go">
+            <div class="panel-body">
+              <button class="btn btn-go" id="et-cargar" type="button">
+                <span class="go-txt">CARGAR PERSONAL</span>
+                <span class="go-arrow">▸</span>
+              </button>
+            </div>
+          </section>
+        </div>
+
+        <div class="col col-out">
+          <section class="panel panel-res">
+            <div class="panel-head">
+              <h2>02 · ESTADO TOTAL</h2>
+              <span class="count" id="et-res-count"></span>
+            </div>
+            <div class="panel-body panel-body-scroll">
+              <div class="et-dash" id="et-dash" hidden>
+                <div class="et-dash-card">
+                  <span class="et-dash-num" id="et-dash-personas">0</span>
+                  <span class="et-dash-lbl">personas vencidas</span>
+                </div>
+                <div class="et-dash-card et-dash-vencido">
+                  <span class="et-dash-num" id="et-dash-vencidos">0</span>
+                  <span class="et-dash-lbl">RRCC vencidos</span>
+                </div>
+                <div class="et-dash-card et-dash-actualizar">
+                  <span class="et-dash-num" id="et-dash-porvencer">0</span>
+                  <span class="et-dash-lbl">RRCC por vencer</span>
+                </div>
+              </div>
+              <div id="et-resultados"></div>
+            </div>
+          </section>
+
+          <section class="panel panel-term">
+            <div class="panel-head">
+              <h2>03 · CONSOLA</h2>
+              <button class="lnk" id="et-log-clear" type="button">limpiar</button>
+            </div>
+            <div class="panel-body panel-body-flush">
+              <div class="term" id="et-term" role="log" aria-live="polite"></div>
             </div>
           </section>
         </div>

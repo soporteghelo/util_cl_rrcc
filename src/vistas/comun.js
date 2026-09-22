@@ -302,6 +302,50 @@ export async function copiarTexto(texto) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Texto seguro para volcar como HTML                                  */
+/* ------------------------------------------------------------------ */
+
+export const escaparHtml = (valor) =>
+  String(valor ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+/** "faltan 5 día(s)" / "vence hoy" / "vencido hace 5 día(s)", para los reportes de vencimientos. */
+export function textoDias(dias) {
+  if (dias === null || dias === undefined || Number.isNaN(dias)) return "—";
+  if (dias > 0) return `faltan ${dias} día(s)`;
+  if (dias === 0) return "vence hoy";
+  return `vencido hace ${Math.abs(dias)} día(s)`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Reintento ante un Apps Script que responde con una pagina rota      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Las cargas mas pesadas (todo el personal de una vez) son las que mas
+ * tardan en Apps Script. Cuando dos personas las disparan casi a la vez,
+ * Google satura y responde con una pagina rota en vez de JSON (ya
+ * reintentado del lado servidor sin exito). Eso llega aca como HTTP 502; se
+ * reintenta una vez mas, desde el navegador, antes de rendirse y avisarle al
+ * usuario.
+ */
+export async function conReintento(tarea, consola, intentos = 2) {
+  for (let i = 1; ; i++) {
+    try {
+      return await tarea();
+    } catch (e) {
+      if (e.estado !== 502 || i > intentos) throw e;
+      consola(`Apps Script no respondió, reintentando (${i}/${intentos})…`, "warn");
+      await new Promise((r) => setTimeout(r, 1500 * i));
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Descargas                                                           */
 /* ------------------------------------------------------------------ */
 

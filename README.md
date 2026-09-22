@@ -266,7 +266,7 @@ vacío. Una fila sin `Cargo` vale como regla general de su `Area`. La
 | `A_SIN_CERT` | `MANTENER` | `MANTENER` o `DEGRADAR` (ver más abajo) |
 | `PLANTILLA_CARPETA` | `{DNI}_{APELLIDOS} {NOMBRES}` | nombre de la carpeta por persona |
 | `FOTOCHECK_ANCHO_CM` / `FOTOCHECK_ALTO_CM` | 10 / 8 | tamaño del fotocheck en el Word |
-| `ANTIGUO_ANCHO_CM` | 11.5 | ancho de la foto del fotocheck antiguo |
+| `ANTIGUO_ANCHO_CM` | 17 | ancho de la foto del fotocheck antiguo (anverso+reverso lado a lado); 17 cm es el ancho completo de la página entre márgenes |
 
 ---
 

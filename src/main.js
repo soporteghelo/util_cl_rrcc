@@ -13,7 +13,7 @@
 import "./style.css";
 import { desdeTexto, normalizarDni, normalizarLista } from "./lib/dni.js";
 import { extraerDocumentos } from "./lib/excel.js";
-import { buscar, descargar } from "./lib/api.js";
+import { buscar, descargar, sheets } from "./lib/api.js";
 import {
   EscritorCarpeta,
   descargarZip,
@@ -25,6 +25,7 @@ import { montarPestanas, notificar, pedirPermisoAviso } from "./vistas/comun.js"
 import { montarRenovacion } from "./vistas/renovacion.js";
 import { montarNuevo } from "./vistas/nuevo.js";
 import { montarEstado } from "./vistas/estado.js";
+import { montarEstadoTotal } from "./vistas/estado-total.js";
 import { montarModalFotocheck } from "./vistas/fotocheck-modal.js";
 
 const $ = (id) => document.getElementById(id);
@@ -58,6 +59,7 @@ const el = {
   toastTit: $("toast-tit"),
   toastSub: $("toast-sub"),
   toastX: $("toast-x"),
+  btnSheets: $("btn-sheets"),
 };
 
 let corriendo = false;
@@ -252,6 +254,38 @@ el.btnDest.addEventListener("click", pedirCarpeta);
 
 el.toastX.addEventListener("click", () => {
   el.toast.hidden = true;
+});
+
+/* ------------------------------------------------------------------ */
+/* Acceso directo al Spreadsheet origen (con contraseña)               */
+/* ------------------------------------------------------------------ */
+
+const CLAVE_SHEETS = "EVEREST";
+
+el.btnSheets?.addEventListener("click", async () => {
+  const clave = window.prompt("Contraseña para abrir la base en Google Sheets:");
+  if (clave === null) return; // cancelado
+  if (clave !== CLAVE_SHEETS) {
+    notificar("Contraseña incorrecta", "No se abrió el Sheets.", "warn");
+    return;
+  }
+
+  // La pestaña se abre YA, dentro del gesto del usuario (sync, antes de
+  // cualquier await): si se abre despues de la respuesta del servidor el
+  // navegador la trata como popup no solicitado y la bloquea.
+  const ventana = window.open("", "_blank", "noopener");
+  el.btnSheets.disabled = true;
+  try {
+    const r = await sheets({ accion: "comprobar" });
+    if (!r.spreadsheet) throw new Error("el servidor no devolvió el ID del Spreadsheet");
+    if (ventana) ventana.location = `https://docs.google.com/spreadsheets/d/${r.spreadsheet}/edit`;
+    else window.open(`https://docs.google.com/spreadsheets/d/${r.spreadsheet}/edit`, "_blank", "noopener");
+  } catch (e) {
+    ventana?.close();
+    notificar("No se pudo abrir el Sheets", e.message, "warn");
+  } finally {
+    el.btnSheets.disabled = false;
+  }
 });
 
 /* ------------------------------------------------------------------ */
@@ -631,6 +665,7 @@ el.carpeta.addEventListener("click", async () => {
       ["tab-renovacion", "vista-renovacion"],
       ["tab-nuevo", "vista-nuevo"],
       ["tab-estado", "vista-estado"],
+      ["tab-estado-total", "vista-estado-total"],
     ],
     1, // arranca en RENOVACIÓN
   );
@@ -641,4 +676,5 @@ el.carpeta.addEventListener("click", async () => {
   const renovacion = montarRenovacion();
   montarNuevo({ obtenerContexto: () => renovacion.contexto() });
   montarEstado();
+  montarEstadoTotal();
 })();

@@ -107,7 +107,9 @@ export function cargarImagen(fuente) {
 
 /**
  * Junta 1 o 2 fotos del fotocheck antiguo (anverso y reverso del carnet
- * fisico) en una sola imagen, una debajo de la otra, para pegar en el Word.
+ * fisico) en una sola imagen para pegar en el Word. Con las dos, van lado a
+ * lado a la misma altura, como las dos caras de un carnet fisico (antes
+ * quedaban una debajo de la otra, en una tira vertical incomoda de leer).
  * Si llega una sola, se usa tal cual: no todo carnet tiene reverso para
  * fotografiar. Devuelve { datos, mime, ancho, alto } listo para `armarAutorizacion`.
  */
@@ -118,14 +120,16 @@ export async function combinarFotocheckAntiguo(archivos) {
   const imagenes = (await Promise.all(lista.map((a) => cargarImagen(a)))).filter(Boolean);
   if (!imagenes.length) throw new Error("no se pudo leer la imagen");
 
-  const ancho = Math.min(2000, Math.max(...imagenes.map((img) => img.naturalWidth || img.width)));
-  const separacion = imagenes.length > 1 ? Math.round(ancho * 0.015) || 6 : 0;
-  const altos = imagenes.map((img) => {
+  // altura compartida: la menor de las dos fotos, para no agrandar una por
+  // encima de su resolucion real (se veria borrosa).
+  const alto = Math.min(1200, ...imagenes.map((img) => img.naturalHeight || img.height));
+  const separacion = imagenes.length > 1 ? Math.round(alto * 0.02) || 10 : 0;
+  const anchos = imagenes.map((img) => {
     const w = img.naturalWidth || img.width;
     const h = img.naturalHeight || img.height;
-    return Math.round((h * ancho) / w);
+    return Math.round((w * alto) / h);
   });
-  const alto = altos.reduce((suma, h) => suma + h, 0) + separacion * Math.max(imagenes.length - 1, 0);
+  const ancho = anchos.reduce((suma, w) => suma + w, 0) + separacion * Math.max(imagenes.length - 1, 0);
 
   const lienzo = document.createElement("canvas");
   lienzo.width = ancho;
@@ -133,10 +137,10 @@ export async function combinarFotocheckAntiguo(archivos) {
   const ctx = lienzo.getContext("2d");
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, ancho, alto);
-  let y = 0;
+  let x = 0;
   imagenes.forEach((img, i) => {
-    ctx.drawImage(img, 0, y, ancho, altos[i]);
-    y += altos[i] + separacion;
+    ctx.drawImage(img, x, 0, anchos[i], alto);
+    x += anchos[i] + separacion;
   });
 
   const blob = await new Promise((resolver) => lienzo.toBlob(resolver, "image/png"));

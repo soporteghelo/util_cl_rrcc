@@ -64,7 +64,7 @@ const CONFIG_POR_DEFECTO = [
   ["PREFIJO_CODIGO", "AE"],
   ["FOTOCHECK_ALTO_CM", 8],
   ["FOTOCHECK_ANCHO_CM", 10],
-  ["ANTIGUO_ANCHO_CM", 11.5],
+  ["ANTIGUO_ANCHO_CM", 17],
 ];
 
 const CABECERA_CURSOS = ["nombre_certificado", "codigo_rrcc", "fuente_preferida", "nota"];
@@ -107,10 +107,22 @@ async function accionPersona({ dni }) {
   return { encontrada: true, dni: clave, fila, valores, datos: leerFila(valores) };
 }
 
-/** Todo el personal, para el reporte de vencimientos por RRCC. */
-async function accionListado() {
+/**
+ * Todo el personal, o solo quienes coinciden con `filtro` ("vencidos_activos":
+ * ESTADO_FINAL = VENCIDO y _EstaTE = ACTIVO), para el reporte de vencimientos.
+ * Filtrar aca (antes de responder) evita mandar por red a las 600+ personas
+ * de la hoja cuando la vista solo necesita a un puñado de ellas.
+ */
+async function accionListado({ filtro } = {}) {
+  const normalizar = (valor) => String(valor ?? "").trim().toUpperCase();
   const valores = await leerTodoElPersonal();
-  return { personas: valores.map((fila) => leerFila(fila)) };
+  let personas = valores.map((fila) => leerFila(fila));
+  if (filtro === "vencidos_activos") {
+    personas = personas.filter(
+      (p) => normalizar(p.estadoFinal) === "VENCIDO" && normalizar(p.estadoTrabajador) === "ACTIVO"
+    );
+  }
+  return { personas };
 }
 
 async function accionGuardar({ fila, valores, noMapeados, datos }) {

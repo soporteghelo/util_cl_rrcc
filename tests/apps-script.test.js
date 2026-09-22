@@ -91,7 +91,7 @@ function cargar(hoja) {
     Utilities: {},
     Session: {},
   };
-  return vm.runInNewContext(`${CODIGO}\n;({ guardar, alta, formulaEstado, CABECERA, DATOS, COL_ESTADO })`, sandbox);
+  return vm.runInNewContext(`${CODIGO}\n;({ guardar, alta, listado, formulaEstado, CABECERA, DATOS, COL_ESTADO })`, sandbox);
 }
 
 /* ---------------- ayudas ---------------- */
@@ -319,4 +319,34 @@ test("guardar sin datos sigue funcionando igual y avisa que no reemplazo formula
   const r = api.guardar({ fila: 4, valores: filaDe(api, { "Fecha de capacitacion_IE": "2026-08-09" }) });
   assert.equal(r.ok, true);
   assert.deepEqual(Array.from(r.formulaReemplazada), []);
+});
+
+/* ---------------- listado (reporte "estado total") ---------------- */
+
+test("listado sin filtro trae a todos; con 'vencidos_activos' solo a quien esta VENCIDO y ACTIVO", () => {
+  const hoja = hojaSimulada("BD_AESA", 98);
+  const api = cargar(hoja);
+
+  const filas = [
+    filaDe(api, { DNI: "10000001", ESTADO_FINAL: "VENCIDO", _EstaTE: "ACTIVO" }),
+    filaDe(api, { DNI: "10000002", ESTADO_FINAL: " VENCIDO ", _EstaTE: " CESADO " }), // con espacios, pero no activo
+    filaDe(api, { DNI: "10000003", ESTADO_FINAL: "VIGENTE", _EstaTE: "ACTIVO" }), // activo pero no vencido
+    filaDe(api, { DNI: "10000004", ESTADO_FINAL: "vencido", _EstaTE: "activo" }), // minusculas: cuenta igual
+    filaDe(api, { DNI: "10000005", ESTADO_FINAL: "VENCIDO", _EstaTE: " ACTIVO " }), // con espacios: tambien cuenta
+  ];
+  filas.forEach((f, i) => hoja.getRange(4 + i, 1, 1, f.length).setValues([f]));
+
+  assert.equal(api.listado().personas.length, 5, "sin filtro trae a todos");
+
+  const filtrados = api.listado("vencidos_activos").personas;
+  assert.deepEqual(filtrados.map((p) => p.dni).sort(), ["10000001", "10000004", "10000005"]);
+});
+
+test("listado con un filtro desconocido no filtra (compatibilidad hacia atras)", () => {
+  const hoja = hojaSimulada("BD_AESA", 98);
+  const api = cargar(hoja);
+  const f = filaDe(api, { DNI: "10000005", ESTADO_FINAL: "VIGENTE", _EstaTE: "ACTIVO" });
+  hoja.getRange(4, 1, 1, f.length).setValues([f]);
+
+  assert.equal(api.listado("otro_filtro_futuro").personas.length, 1);
 });

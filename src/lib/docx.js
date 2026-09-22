@@ -167,13 +167,14 @@ export async function armarDocx(imagenes, tipo = "blob") {
  *
  * - `fotocheck`: PNG del fotocheck nuevo. Va SIEMPRE a 10 x 8 cm, que es el
  *   tamano que hoy tienen los documentos oficiales.
- * - `antiguo`: foto del fotocheck viejo. Se respeta su proporcion, limitando
- *   el ancho (por defecto 11.5 cm, lo que miden los documentos actuales).
+ * - `antiguo`: foto(s) del fotocheck viejo, ya combinadas lado a lado por
+ *   `combinarFotocheckAntiguo`. Se respeta su proporcion, limitando el ancho
+ *   (por defecto 17 cm, el ancho completo de la pagina entre margenes).
  */
 export async function armarAutorizacion({ fotocheck, antiguo = null, medidas = {}, tipo = "blob" }) {
   const anchoFc = Number(medidas.fotocheckAnchoCm ?? 10);
   const altoFc = Number(medidas.fotocheckAltoCm ?? 8);
-  const anchoMax = Number(medidas.antiguoAnchoCm ?? 11.5);
+  const anchoMax = Number(medidas.antiguoAnchoCm ?? 17);
 
   const imagenes = [
     {

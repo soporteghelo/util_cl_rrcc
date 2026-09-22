@@ -32,8 +32,10 @@ import {
   aplicarCierre,
   filaNueva,
   tiposDeMatriz,
+  cargoMasParecido,
   leerFila,
   personasPorRiesgo,
+  riesgosProblemaDe,
 } from "../shared/estados.js";
 import { CABECERA, INDICE, CODIGOS_RRCC, colCap, colVenc, colTipo, colEstado } from "../shared/rrcc.js";
 
@@ -350,6 +352,19 @@ test("con el cargo exacto, el area de la matriz no tiene que coincidir con la de
   );
 });
 
+test("cargoMasParecido sugiere el cargo de la matriz mas cercano a un typo", () => {
+  const matriz = [
+    ["Cargo", "Area", ...CODIGOS_RRCC],
+    ["MAESTRO DE SERVICIOS MINA", "Avances", ...Array(18).fill("")],
+    ["MECANICO GENERAL I", "MINA", ...Array(18).fill("")],
+  ];
+  assert.equal(cargoMasParecido(matriz, "MAESTO DE SERVICIOS MINA"), "MAESTRO DE SERVICIOS MINA", "1 letra de menos: es un typo");
+  assert.equal(cargoMasParecido(matriz, "MAESTRO DE SERVICIOS MINA"), null, "coincidencia exacta: nada que sugerir");
+  assert.equal(cargoMasParecido(matriz, "SUPERVISOR DE ACEROS"), null, "muy distinto: no es un typo, es otro cargo");
+  assert.equal(cargoMasParecido(matriz, ""), null, "sin cargo no hay nada que sugerir");
+  assert.equal(cargoMasParecido([], "MAESTO DE SERVICIOS MINA"), null, "sin matriz no hay nada que sugerir");
+});
+
 test("filaNueva arma la fila del alta con sus datos y sus tipos", () => {
   const fila = filaNueva({
     datos: {
@@ -441,6 +456,42 @@ test("personasPorRiesgo calcula la vigencia si falta (cap + umbral) sin tocar la
   const item = grupos.find((g) => g.codigo === "TA").items[0];
   assert.equal(item.riesgo.venc, "2027-01-01");
   assert.equal(personas[0].riesgos.find((r) => r.codigo === "TA").venc, "", "no muta la persona de entrada");
+});
+
+test("riesgosProblemaDe separa lo vencido de lo por vencer y deja fuera lo vigente", () => {
+  const fila = filaVacia();
+  fila[INDICE["DNI"]] = "40000001";
+  fila[colTipo("AE")] = "A";
+  fila[colCap("AE")] = "2025-01-01"; // muy vencido para HOY
+  fila[colTipo("TA")] = "A";
+  fila[colCap("TA")] = "2025-10-01"; // por vencer (dentro del umbral ACTUALIZAR)
+  fila[colTipo("IE")] = "A";
+  fila[colCap("IE")] = "2026-09-01"; // vigente, no entra en ninguna lista
+
+  const persona = leerFila(fila);
+  const { vencidos, porVencer } = riesgosProblemaDe(persona, { hoy: HOY });
+
+  assert.equal(vencidos.length, 1);
+  assert.equal(vencidos[0].codigo, "AE");
+  assert.ok(vencidos[0].dias < 0);
+
+  assert.equal(porVencer.length, 1);
+  assert.equal(porVencer[0].codigo, "TA");
+
+  assert.ok(!vencidos.some((r) => r.codigo === "IE"));
+  assert.ok(!porVencer.some((r) => r.codigo === "IE"));
+});
+
+test("riesgosProblemaDe ordena cada lista de lo mas urgente a lo menos urgente", () => {
+  const fila = filaVacia();
+  fila[colTipo("AE")] = "A";
+  fila[colCap("AE")] = "2024-01-01"; // el mas vencido
+  fila[colTipo("TA")] = "A";
+  fila[colCap("TA")] = "2025-06-01"; // vencido, pero menos que AE
+
+  const persona = leerFila(fila);
+  const { vencidos } = riesgosProblemaDe(persona, { hoy: HOY });
+  assert.deepEqual(vencidos.map((r) => r.codigo), ["AE", "TA"]);
 });
 
 test("el PDF consolidado de Drive no se toma por un curso sin mapear", () => {

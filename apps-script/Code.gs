@@ -93,7 +93,7 @@ function hojas(b) {
   const accion=String(b.accion||"");
   if (accion === "contexto") return contexto();
   if (accion === "persona") return persona(b.dni);
-  if (accion === "listado") return listado();
+  if (accion === "listado") return listado(b.filtro);
   if (accion === "guardar") return guardar(b);
   if (accion === "alta") return alta(b);
   if (accion === "cargos") return cargos();
@@ -111,14 +111,25 @@ function contexto() {
 function iso(x) { if(Object.prototype.toString.call(x)==="[object Date]"&&!isNaN(x))return Utilities.formatDate(x,Session.getScriptTimeZone(),"yyyy-MM-dd"); const s=String(x||"").trim(),m=/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/.exec(s);return m?m[3]+"-"+("0"+m[2]).slice(-2)+"-"+("0"+m[1]).slice(-2):s; }
 function datosFila(f) { const v=n=>String(f[CABECERA.indexOf(n)]==null?"":f[CABECERA.indexOf(n)]).trim(), base=DATOS.length; return {codigo:v("Codigo"),item:v("Item"),apellidos:v("Apellidos"),nombres:v("Nombres"),dni:dni(v("DNI")),empresa:v("EMPRESA"),guardia:v("Guardia"),cargo:v("Cargo Planilla"),area:v("Area Planilla"),comentario:v("COMENTARIO"),examenMedico:iso(v("F. Ex. Medico")),vencimientoEmo:iso(v("F. Vencimiento")),usoLentes:v("USO DE LENTES"),restricciones:v("RESTRICCIONES_EMO"),foto:v("FOTO"),fotocheckAntiguoDriveId:v("FOTOCHECK_ANTIGUO_DRIVE_ID"),carpetaDriveId:v("CARPETA_DRIVE_ID"),estadoFinal:v("ESTADO_FINAL"),fechaMinima:iso(v("FECHA MINIMA")),dias:v("DIAS"),estadoTrabajador:v("_EstaTE"),nombreCompleto:[v("Apellidos"),v("Nombres")].filter(Boolean).join(" "),riesgos:RIESGOS.map((codigo,i)=>({codigo,rotulo:codigo,nombre:codigo,cap:iso(f[base+i*4]),venc:iso(f[base+i*4+1]),tipo:String(f[base+i*4+2]||"").trim().toUpperCase(),estado:String(f[base+i*4+3]||"").trim().toUpperCase()}))}; }
 function persona(valor) { const k=dni(valor); if(!k) throw new Error("DNI invalido"); const sh=personal(), col=DATOS.indexOf("DNI")+1, first=CONFIG.filaDatos, n=Math.max(sh.getLastRow()-first+1,0); const vals=n?sh.getRange(first,col,n,1).getValues():[]; for(let i=0;i<vals.length;i++) if(dni(vals[i][0])===k) { const row=first+i, v=completas(sh.getRange(row,1,1,Math.min(sh.getMaxColumns(),CABECERA.length)).getValues()[0]); return {encontrada:true,dni:k,fila:row,valores:v,datos:datosFila(v)}; } return {encontrada:false,dni:k}; }
-/** Todo el personal, para el reporte de vencimientos por RRCC (una sola lectura, no una por persona). */
-function listado() {
+/**
+ * Todo el personal, o solo quienes coinciden con `filtro`, para el reporte de
+ * vencimientos por RRCC (una sola lectura, no una por persona).
+ *
+ * `filtro:"vencidos_activos"` (ESTADO_FINAL=VENCIDO y _EstaTE=ACTIVO) filtra
+ * ANTES de devolver: la vista "estado total" solo necesita a un puñado de las
+ * 600+ personas de la hoja, y lo mas lento del pedido es serializar y mandar
+ * por red el JSON de todo el mundo (1.5+ MB), no la lectura del rango.
+ */
+function listado(filtro) {
   const sh=personal(), first=CONFIG.filaDatos, last=sh.getLastRow();
   if (last < first) return { personas: [] };
   const width = Math.min(sh.getMaxColumns(), CABECERA.length);
   const filas = sh.getRange(first, 1, last-first+1, width).getValues();
   const iDni = DATOS.indexOf("DNI");
-  const personas = filas.filter(f => String(f[iDni]||"").trim()).map(f => datosFila(completas(f)));
+  let personas = filas.filter(f => String(f[iDni]||"").trim()).map(f => datosFila(completas(f)));
+  if (filtro === "vencidos_activos") {
+    personas = personas.filter(p => normal(p.estadoFinal) === "VENCIDO" && normal(p.estadoTrabajador) === "ACTIVO");
+  }
   return { personas: personas };
 }
 function colLetra(n) { let s=""; for(;n>0;n=Math.floor((n-1)/26)) s=String.fromCharCode(65+(n-1)%26)+s; return s; }
@@ -175,7 +186,7 @@ function guardar(b) { if(!b.fila||!Array.isArray(b.valores)) throw new Error("fa
 function alta(b) { if(!Array.isArray(b.valores)) throw new Error("falta valores"); const v=completas(b.valores), k=dni(v[6]); if(!k) throw new Error("la persona nueva no trae DNI"); if(persona(k).encontrada) { const x=persona(k); return {ok:false,yaExiste:true,fila:x.fila,error:"el DNI ya existe"}; } const sh=personal(), first=CONFIG.filaDatos; if(!v[2]) { const codes=sh.getRange(first,3,Math.max(sh.getLastRow()-first+1,1),1).getValues().flat(); let max=0; codes.forEach(x=>{const m=/^AE(\d+)$/i.exec(x);if(m)max=Math.max(max,+m[1])});v[2]="AE"+("000"+(max+1)).slice(-3); } if(!v[1])v[1]=Math.max(sh.getLastRow()-first+2,1); const width=Math.min(sh.getMaxColumns(),CABECERA.length), inicio=DATOS.length, row=sh.getLastRow()+1; sh.getRange(row,1,1,Math.min(inicio,width)).setValues([v.slice(0,inicio)]); if(width>inicio) { try { escribirBloque(sh,row,v,true); } catch(err) { try { sh.getRange(row,1,1,width).clearContent(); } catch(_) {} throw err; } } return {ok:true,fila:row,codigo:v[2],valores:v}; }
 function cargos() { const sh=personal(), first=CONFIG.filaDatos, n=Math.max(sh.getLastRow()-first+1,0), distinct=c=>[...new Set(n?sh.getRange(first,c,n,1).getValues().flat().map(String).map(x=>x.trim()).filter(Boolean):[])].sort(); return {cargos:distinct(10),areas:distinct(12)}; }
 function comprobar() { const sh=personal(), row=CONFIG.filaCabecera, actual=sh.getRange(row,1,1,Math.min(sh.getMaxColumns(),CABECERA.length)).getValues()[0], dif=[]; CABECERA.forEach((x,i)=>{if(actual[i]!==undefined&&actual[i]!==""&&normal(actual[i])!==normal(x))dif.push({columna:i+1,esperada:x,real:String(actual[i])})}); return {ok:!dif.length,spreadsheet:libro().getId(),hojaPersonal:sh.getName(),hojas:libro().getSheets().map(x=>x.getName()),faltan:[H.cursos,H.matriz,H.config].filter(x=>!libro().getSheetByName(x)),revision:{diferencias:dif,grave:!!dif.length}}; }
-function setup() { const ss=libro(), creadas=[]; [H.cursos,H.matriz,H.config].forEach(n=>{if(!ss.getSheetByName(n)){ss.insertSheet(n);creadas.push(n)}}); const c=ss.getSheetByName(H.cursos),m=ss.getSheetByName(H.matriz),f=ss.getSheetByName(H.config), hecho=[]; if(!c.getLastRow()){c.getRange(1,1,1,4).setValues([["nombre_certificado","codigo_rrcc","fuente_preferida","nota"]]);hecho.push(H.cursos+": cabecera creada");} if(!m.getLastRow()){m.getRange(1,1,1,2+RIESGOS.length).setValues([["Cargo","Area"].concat(RIESGOS)]);hecho.push(H.matriz+": cabecera creada");} if(!f.getLastRow()){f.getRange(1,1,9,2).setValues([["CLAVE","VALOR"],["UMBRAL_VENCIDO",365],["UMBRAL_ACTUALIZAR",330],["A_SIN_CERT","MANTENER"],["PLANTILLA_CARPETA","{DNI}_{APELLIDOS} {NOMBRES}"],["PREFIJO_CODIGO","AE"],["FOTOCHECK_ALTO_CM",8],["FOTOCHECK_ANCHO_CM",10],["ANTIGUO_ANCHO_CM",11.5]]);hecho.push(H.config+": parametros creados");} const sh=personal(); if(sh.getMaxColumns()<CABECERA.length){sh.insertColumnsAfter(sh.getMaxColumns(),CABECERA.length-sh.getMaxColumns());hecho.push("columnas extra agregadas");} return {ok:true,creadas,hecho,avisos:[],revision:comprobar().revision}; }
+function setup() { const ss=libro(), creadas=[]; [H.cursos,H.matriz,H.config].forEach(n=>{if(!ss.getSheetByName(n)){ss.insertSheet(n);creadas.push(n)}}); const c=ss.getSheetByName(H.cursos),m=ss.getSheetByName(H.matriz),f=ss.getSheetByName(H.config), hecho=[]; if(!c.getLastRow()){c.getRange(1,1,1,4).setValues([["nombre_certificado","codigo_rrcc","fuente_preferida","nota"]]);hecho.push(H.cursos+": cabecera creada");} if(!m.getLastRow()){m.getRange(1,1,1,2+RIESGOS.length).setValues([["Cargo","Area"].concat(RIESGOS)]);hecho.push(H.matriz+": cabecera creada");} if(!f.getLastRow()){f.getRange(1,1,9,2).setValues([["CLAVE","VALOR"],["UMBRAL_VENCIDO",365],["UMBRAL_ACTUALIZAR",330],["A_SIN_CERT","MANTENER"],["PLANTILLA_CARPETA","{DNI}_{APELLIDOS} {NOMBRES}"],["PREFIJO_CODIGO","AE"],["FOTOCHECK_ALTO_CM",8],["FOTOCHECK_ANCHO_CM",10],["ANTIGUO_ANCHO_CM",17]]);hecho.push(H.config+": parametros creados");} const sh=personal(); if(sh.getMaxColumns()<CABECERA.length){sh.insertColumnsAfter(sh.getMaxColumns(),CABECERA.length-sh.getMaxColumns());hecho.push("columnas extra agregadas");} return {ok:true,creadas,hecho,avisos:[],revision:comprobar().revision}; }
 
 function drive(b) { const a=String(b.accion||""); if(a==="carpeta")return carpeta(b);if(a==="carpetas")return carpetas();if(a==="subir")return subir(b);if(a==="foto")return subir(Object.assign({},b,{carpetaId:b.carpetaId||folderByIdOrName(CONFIG.carpetaFotosId,CONFIG.carpetaFotosNombre).getId()}));if(a==="foto-de")return fotoDe(b);if(a==="bajar")return bajar(b);if(a==="listar")return listar(b);throw new Error("accion desconocida: "+a); }
 function carpeta(b){const p=b.padre?DriveApp.getFolderById(b.padre):folderByIdOrName(CONFIG.carpetaSalidasId,CONFIG.carpetaSalidasNombre),it=p.getFoldersByName(b.nombre),existe=it.hasNext(),f=existe?it.next():p.createFolder(b.nombre);return {ok:true,carpetaId:f.getId(),nombre:f.getName(),creada:!existe};}

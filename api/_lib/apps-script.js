@@ -5,8 +5,16 @@ export function appsScriptUrl() {
 
 /** Intentos totales ante una respuesta que no es JSON (el primero + los reintentos). */
 const INTENTOS = 3;
-/** Espera antes de reintentar (ms x numero de intento); se puede cambiar por entorno, las pruebas la ponen a 0. */
-const espera = (intento) => Number(process.env.APPS_SCRIPT_REINTENTO_MS ?? 1200) * intento;
+/**
+ * Espera antes de reintentar (ms x numero de intento, con jitter); se puede
+ * cambiar por entorno, las pruebas la ponen a 0. El jitter importa: cuando
+ * dos pestañas piden "listado" (la accion mas pesada) casi al mismo tiempo,
+ * ambas reciben la pagina rota de Google en el mismo intento y, sin jitter,
+ * sus reintentos caen en el mismo instante y vuelven a chocar entre si en
+ * cada vuelta. Con una espera aleatoria se desincronizan y la segunda suele
+ * encontrar el script libre.
+ */
+const espera = (intento) => Number(process.env.APPS_SCRIPT_REINTENTO_MS ?? 1200) * intento * (0.5 + Math.random());
 
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -23,6 +31,21 @@ async function unaPeticion(url, cuerpo) {
   } catch {
     return { r, texto, datos: null };
   }
+}
+
+/**
+ * `doGet()` (en Code.gs) siempre devuelve el mismo "hello" fijo:
+ * {ok:true, servicio:"RRCC Apps Script", version:1}, sin relacion con la
+ * accion pedida. Con dos o mas pedidos casi simultaneos al mismo Web App
+ * (p.ej. "contexto" + "listado" al cargar el personal), Google a veces
+ * entrega esta respuesta en vez de la de `doPost()`. Llega como JSON valido
+ * y sin `error`, asi que sin este chequeo pasaria como un exito silencioso:
+ * "listado" quedaria en 0 personas sin ningun aviso en la consola. Se
+ * reconoce por su forma fija (ninguna accion real trae "servicio") y se
+ * trata igual que una pagina rota: se reintenta.
+ */
+function esRespuestaFantasma(datos) {
+  return Boolean(datos) && datos.servicio === "RRCC Apps Script" && datos.version === 1;
 }
 
 /** Mensaje legible de una respuesta que no es JSON (normalmente una pagina de error de Google). */
@@ -64,13 +87,17 @@ export async function pedirAppsScript(servicio, cuerpo) {
   let ultima = null;
   for (let intento = 1; intento <= INTENTOS; intento++) {
     ultima = await unaPeticion(url, envio);
-    if (ultima.datos) break;
+    if (ultima.datos && !esRespuestaFantasma(ultima.datos)) break;
     if (intento < INTENTOS) await dormir(espera(intento));
   }
 
   const { r, texto, datos } = ultima;
-  if (!datos) {
-    const e = new Error(mensajeDePagina(r, texto));
+  if (!datos || esRespuestaFantasma(datos)) {
+    const e = new Error(
+      datos
+        ? `Apps Script devolvió el "hello" de doGet en vez de la respuesta de "${servicio}:${cuerpo?.accion || ""}" (pedidos simultaneos saturando el Web App)`
+        : mensajeDePagina(r, texto)
+    );
     e.ambiguo = true; // la ejecucion pudo haber ocurrido: quien escribe debe verificarlo
     throw e;
   }

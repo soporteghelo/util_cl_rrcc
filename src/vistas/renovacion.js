@@ -13,7 +13,7 @@ import { $, crearConsola, crearProgreso, notificar, pedirPermisoAviso, copiarTex
 import { desdeTexto, normalizarLista } from "../lib/dni.js";
 import { extraerDocumentos } from "../lib/excel.js";
 import { sheets, drive, desdeBase64, descargar, blobABase64 } from "../lib/api.js";
-import { cargarContexto, renovarPersona, consultarPersona, generarSalidas, resumenAutorizaciones, fotoDeDni, guardarFilaVerificada, MIME_DOCX } from "../lib/renovacion.js";
+import { cargarContexto, renovarPersona, consultarPersona, generarSalidas, resumenAutorizaciones, fotoDeDni, subirFoto, guardarFilaVerificada, MIME_DOCX } from "../lib/renovacion.js";
 import {
   aFormatoCorto,
   aIso,
@@ -91,6 +91,12 @@ export function montarRenovacion() {
   let abortador = null;
   let contexto = null;
   const fichas = new Map(); // dni -> { persona, foto, antiguo }
+
+  // resubida del fotocheck/Word en segundo plano (ver sincronizarSalidaEnDrive):
+  // temporizador pendiente por DNI (edicion agrupada) y promesa en curso por DNI
+  // (para no mandar dos subidas a la vez a la misma carpeta).
+  const temporizadoresSalida = new Map();
+  const sincronizacionesEnCurso = new Map();
 
   /* ---------------- entrada ---------------- */
 
@@ -314,35 +320,51 @@ export function montarRenovacion() {
   }
 
   /**
-   * Fotocheck antiguo adjuntado a mano: pide ANVERSO y REVERSO del carnet
-   * fisico en dos pasos separados (dos selectores, uno a la vez, cada uno
-   * con su propio aviso) y los combina en una sola imagen. Si no hay reverso
-   * para fotografiar, se puede cancelar ese segundo paso y queda solo el
-   * anverso. Reemplaza, para esta persona, lo que se hubiera bajado de Drive
-   * por FOTOCHECK_ANTIGUO_DRIVE_ID.
+   * Fotocheck antiguo adjuntado a mano: hay un boton por lado (ANVERSO y
+   * REVERSO) para que se pueda empezar por cualquiera de los dos. Si es la
+   * primera vez que se adjunta algo para esta persona, apenas se elige un
+   * lado se pide el otro al toque (se puede cancelar si no hay reverso que
+   * fotografiar); si ya estaba completo y solo se quiere corregir un lado,
+   * se reemplaza ese solo, sin volver a preguntar por el otro. Los dos
+   * lados se combinan en una sola imagen que reemplaza, para esta persona,
+   * lo que se hubiera bajado de Drive por FOTOCHECK_ANTIGUO_DRIVE_ID.
    *
    * Si la persona ya tiene carpeta en Drive, el Word se resube al toque: no
    * se espera a que despues se abra/comparta/descargue la carpeta, que es
    * cuando antes se sincronizaba (y es facil no llegar a hacerlo nunca).
    */
-  async function elegirFotocheckAntiguo(dni) {
+  async function elegirLadoAntiguo(dni, lado) {
     const ficha = fichas.get(dni);
     if (!ficha) return;
 
-    notificar("Fotocheck antiguo · 1/2", "Elige la foto del ANVERSO del carnet.");
-    const [anverso] = await elegirImagenes();
-    if (!anverso) return;
+    const eraNuevo = !ficha.antiguoAnversoFile && !ficha.antiguoReversoFile;
 
-    notificar("Fotocheck antiguo · 2/2", "Ahora elige la foto del REVERSO (cancela si no tienes).");
-    const [reverso] = await elegirImagenes();
+    const [archivo] = await elegirImagenes();
+    if (!archivo) return;
+    if (lado === "anverso") ficha.antiguoAnversoFile = archivo;
+    else ficha.antiguoReversoFile = archivo;
 
+    let etiqueta = lado;
+    const otro = lado === "anverso" ? "reverso" : "anverso";
+    if (eraNuevo) {
+      notificar("Fotocheck antiguo", `${lado === "anverso" ? "Anverso" : "Reverso"} cargado. Ahora elige el ${otro.toUpperCase()} (cancela si no lo tienes).`);
+      const [archivoOtro] = await elegirImagenes();
+      if (archivoOtro) {
+        if (otro === "anverso") ficha.antiguoAnversoFile = archivoOtro;
+        else ficha.antiguoReversoFile = archivoOtro;
+        etiqueta = "ambos";
+      }
+    }
+
+    const partes = [ficha.antiguoAnversoFile, ficha.antiguoReversoFile].filter(Boolean);
     try {
-      const combinado = await combinarFotocheckAntiguo(reverso ? [anverso, reverso] : [anverso]);
+      const combinado = await combinarFotocheckAntiguo(partes);
       ficha.antiguoManual = combinado;
       ficha.antiguo = combinado;
       pintarFicha(dni, ficha);
       refrescarFotocheck(dni);
-      await sincronizarSiHayCarpeta(dni, reverso ? "Anverso y reverso combinados en una sola imagen." : "Solo se adjuntó el anverso.");
+      const detalle = etiqueta === "ambos" ? "Anverso y reverso combinados en una sola imagen." : `Se guardó el ${etiqueta}.`;
+      await sincronizarSiHayCarpeta(dni, detalle);
     } catch (e) {
       notificar("No se pudo cargar el fotocheck antiguo", e.message, "warn");
     }
@@ -351,6 +373,8 @@ export function montarRenovacion() {
   async function quitarFotocheckAntiguo(dni) {
     const ficha = fichas.get(dni);
     if (!ficha) return;
+    ficha.antiguoAnversoFile = null;
+    ficha.antiguoReversoFile = null;
     ficha.antiguoManual = null;
     ficha.antiguo = null;
     pintarFicha(dni, ficha);
@@ -358,19 +382,61 @@ export function montarRenovacion() {
     await sincronizarSiHayCarpeta(dni, "Se quitó el fotocheck antiguo.");
   }
 
-  /** Tras cambiar el fotocheck antiguo, resube el Word si la persona ya tiene
-      carpeta en Drive; si no la tiene todavia, no hay nada que actualizar. */
-  async function sincronizarSiHayCarpeta(dni, detalle) {
+  /**
+   * Si la carpeta FOTOS de Drive no tiene la foto de la persona, la tarjeta
+   * ofrece un boton para conseguirla: abre el mismo selector nativo que el
+   * fotocheck antiguo (sin "capture", asi que en el celular pregunta camara
+   * o galeria). La foto elegida se usa al toque en el fotocheck en pantalla
+   * y se sube a FOTOS/<dni>.png para que la proxima renovacion ya la
+   * encuentre sola. Si la persona ya tiene carpeta en Drive, el fotocheck y
+   * el Word se resuben de una vez.
+   */
+  async function agregarFotoPersona(dni) {
+    const ficha = fichas.get(dni);
+    if (!ficha) return;
+
+    const [archivo] = await elegirImagenes();
+    if (!archivo) return;
+
+    ficha.foto = archivo;
+    ficha.fotoManual = archivo;
+    pintarFicha(dni, ficha);
+    refrescarFotocheck(dni);
+
+    try {
+      await subirFoto(archivo, { nombre: `${dni}.png` });
+      consola(`  foto de ${dni} guardada en FOTOS/${dni}.png`, "ok");
+      await sincronizarSiHayCarpeta(dni, "Foto agregada.", {
+        listo: "Foto lista",
+        guardado: "Foto guardada",
+        error: "Foto lista, pero no se pudo actualizar la carpeta",
+      });
+    } catch (e) {
+      notificar("La foto se usa en esta ficha, pero no se pudo guardar en FOTOS", e.message, "warn");
+      consola(`  no se pudo subir la foto de ${dni} a FOTOS: ${e.message}`, "err");
+    }
+  }
+
+  /** Tras cambiar el fotocheck antiguo (o la foto de la persona), resube el
+      Word si la persona ya tiene carpeta en Drive; si no la tiene todavia,
+      no hay nada que actualizar. `titulos` deja reusar esto para la foto
+      nueva sin heredar el texto de "fotocheck antiguo". */
+  async function sincronizarSiHayCarpeta(dni, detalle, titulos = {}) {
+    const {
+      listo = "Fotocheck antiguo listo",
+      guardado = "Fotocheck antiguo guardado",
+      error = "Fotocheck antiguo listo, pero no se pudo actualizar la carpeta",
+    } = titulos;
     const ficha = fichas.get(dni);
     const folderId = ficha?.salida?.carpetaId || ficha?.carpetaId;
     if (!folderId) {
-      notificar("Fotocheck antiguo listo", detalle);
+      notificar(listo, detalle);
       return;
     }
-    ficha.salidaDesactualizada = true; // el antiguo cambio: forzar la resubida aunque nada mas haya cambiado
+    ficha.salidaDesactualizada = true; // cambio en la carpeta: forzar la resubida aunque nada mas haya cambiado
     const ok = await sincronizarSalidaEnDrive(dni);
     notificar(
-      ok ? "Fotocheck antiguo guardado" : "Fotocheck antiguo listo, pero no se pudo actualizar la carpeta",
+      ok ? guardado : error,
       ok
         ? `${detalle} El Word de la carpeta ya lo tiene.`
         : "Se actualizará al abrir, compartir o descargar la carpeta.",
@@ -475,6 +541,7 @@ export function montarRenovacion() {
     pintarBarraEdicion(card, ficha);
     card.querySelector("[data-estado-final]").innerHTML = htmlEstadoFinal(personaVisible(ficha));
     refrescarFotocheck(dni);
+    programarSincronizacion(dni);
   }
 
   const cambiosPendientes = (ficha) => {
@@ -488,6 +555,43 @@ export function montarRenovacion() {
     card.querySelector("[data-edicion-n]").textContent = `${n} cambio(s) sin guardar`;
   }
 
+  /** Deshabilita (o repone) un boton/enlace de accion mientras espera algo
+      async, para que el clic se sienta reconocido al instante aunque la
+      operacion en si tarde (red, Drive). */
+  function marcarOcupado(el, ocupado) {
+    if (!el) return;
+    el.classList.toggle("en-espera", ocupado);
+    if (el.tagName === "BUTTON") el.disabled = ocupado;
+    else el.setAttribute("aria-disabled", String(ocupado));
+  }
+
+  /** Cancela la resubida en segundo plano agendada para `dni`, si habia una. */
+  function cancelarSincronizacionProgramada(dni) {
+    const t = temporizadoresSalida.get(dni);
+    if (t !== undefined) {
+      clearTimeout(t);
+      temporizadoresSalida.delete(dni);
+    }
+  }
+
+  /**
+   * Agenda, para dentro de `retrasoMs`, una resubida en segundo plano del
+   * fotocheck/Word (ver `sincronizarSalidaEnDrive`). Cada llamada reemplaza
+   * la anterior para el mismo DNI: escribir una fecha o el area dispara esto
+   * en cada tecla, y asi solo se sube una vez al dejar de teclear en vez de
+   * una por tecla. La idea es que para cuando se haga clic en ABRIR CARPETA /
+   * DESCARGAR / WHATSAPP la carpeta ya este al dia y esos botones respondan
+   * al toque, sin esperar la subida a Drive en ese momento.
+   */
+  function programarSincronizacion(dni, retrasoMs = 1200) {
+    cancelarSincronizacionProgramada(dni);
+    const t = setTimeout(() => {
+      temporizadoresSalida.delete(dni);
+      sincronizarSalidaEnDrive(dni).catch(() => {});
+    }, retrasoMs);
+    temporizadoresSalida.set(dni, t);
+  }
+
   /**
    * Antes de abrir la carpeta, compartirla o descargarla en ZIP, la carpeta
    * de Drive tiene que mostrar lo mismo que la ficha en pantalla: si se
@@ -499,55 +603,76 @@ export function montarRenovacion() {
    * `ficha.salidaDesactualizada` evita resubir cuando no hace falta: sin eso,
    * cada clic en ABRIR CARPETA / WHATSAPP / DESCARGAR volvia a dibujar el
    * fotocheck, armar el Word y hacer dos subidas a Apps Script (lento) aunque
-   * nada hubiera cambiado desde la ultima vez.
+   * nada hubiera cambiado desde la ultima vez. Ademas, cada edicion agenda
+   * esta misma resubida en segundo plano (`programarSincronizacion`): lo
+   * normal es que para cuando se haga clic en esos botones ya este al dia y
+   * esto vuelva al toque sin subir nada de nuevo.
+   *
+   * Si ya hay una subida en curso para este DNI, no se manda una segunda en
+   * paralelo (podrian cruzarse y la carpeta quedar con la version vieja): se
+   * espera esa y se reintenta, por si mientras tanto llego otra edicion.
    */
   async function sincronizarSalidaEnDrive(dni) {
     const ficha = fichas.get(dni);
     const folderId = ficha?.salida?.carpetaId || ficha?.carpetaId;
     if (!folderId || !ficha?.persona) return false;
-    if (!ficha.salidaDesactualizada) return true;
 
-    try {
-      const persona = personaVisible(ficha);
-      const foto = ficha.foto || (await fotoDeDni(persona.dni).catch(() => null));
-      const png = await dibujarFotocheck(persona, { foto, escala: 3 });
-      const pngBlob = await new Promise((resolver) => png.toBlob(resolver, "image/png"));
-      const pngBase64 = await blobABase64(pngBlob);
-      const nombreBase = persona.nombreCompleto || persona.dni;
-
-      const fotocheckSubido = await drive({
-        accion: "subir",
-        carpetaId: folderId,
-        nombre: `FOTOCHECK_${nombreBase}.png`,
-        mime: "image/png",
-        datos: pngBase64,
-      });
-
-      const antiguo = ficha.antiguoManual || ficha.antiguo || null;
-      const docx = await armarAutorizacion({
-        fotocheck: { datos: await pngBlob.arrayBuffer(), mime: "image/png" },
-        antiguo,
-        medidas: {
-          fotocheckAnchoCm: Number(contexto?.config?.FOTOCHECK_ANCHO_CM || 10),
-          fotocheckAltoCm: Number(contexto?.config?.FOTOCHECK_ALTO_CM || 8),
-          antiguoAnchoCm: Number(contexto?.config?.ANTIGUO_ANCHO_CM || 11.5),
-        },
-      });
-      const wordSubido = await drive({
-        accion: "subir",
-        carpetaId: folderId,
-        nombre: `Autorizacion_RRCC_${nombreBase}.docx`,
-        mime: MIME_DOCX,
-        datos: await blobABase64(docx),
-      });
-
-      ficha.salida = { ...(ficha.salida || {}), carpetaId: folderId, fotocheck: fotocheckSubido, word: wordSubido };
-      ficha.salidaDesactualizada = false;
-      return true;
-    } catch (e) {
-      consola(`  no se pudo actualizar el fotocheck/Word de ${dni} en Drive: ${e.message}`, "err");
-      return false; // sigue desactualizada: se reintenta en el proximo abrir/compartir/descargar
+    const enCurso = sincronizacionesEnCurso.get(dni);
+    if (enCurso) {
+      await enCurso;
+      return sincronizarSalidaEnDrive(dni);
     }
+
+    if (!ficha.salidaDesactualizada) return true;
+    cancelarSincronizacionProgramada(dni);
+
+    const tarea = (async () => {
+      try {
+        const persona = personaVisible(ficha);
+        const foto = ficha.foto || (await fotoDeDni(persona.dni).catch(() => null));
+        const png = await dibujarFotocheck(persona, { foto, escala: 3 });
+        const pngBlob = await new Promise((resolver) => png.toBlob(resolver, "image/png"));
+        const pngBase64 = await blobABase64(pngBlob);
+        const nombreBase = persona.nombreCompleto || persona.dni;
+
+        const fotocheckSubido = await drive({
+          accion: "subir",
+          carpetaId: folderId,
+          nombre: `FOTOCHECK_${nombreBase}.png`,
+          mime: "image/png",
+          datos: pngBase64,
+        });
+
+        const antiguo = ficha.antiguoManual || ficha.antiguo || null;
+        const docx = await armarAutorizacion({
+          fotocheck: { datos: await pngBlob.arrayBuffer(), mime: "image/png" },
+          antiguo,
+          medidas: {
+            fotocheckAnchoCm: Number(contexto?.config?.FOTOCHECK_ANCHO_CM || 10),
+            fotocheckAltoCm: Number(contexto?.config?.FOTOCHECK_ALTO_CM || 8),
+            antiguoAnchoCm: Number(contexto?.config?.ANTIGUO_ANCHO_CM || 17),
+          },
+        });
+        const wordSubido = await drive({
+          accion: "subir",
+          carpetaId: folderId,
+          nombre: `Autorizacion_RRCC_${nombreBase}.docx`,
+          mime: MIME_DOCX,
+          datos: await blobABase64(docx),
+        });
+
+        ficha.salida = { ...(ficha.salida || {}), carpetaId: folderId, fotocheck: fotocheckSubido, word: wordSubido };
+        ficha.salidaDesactualizada = false;
+        return true;
+      } catch (e) {
+        consola(`  no se pudo actualizar el fotocheck/Word de ${dni} en Drive: ${e.message}`, "err");
+        return false; // sigue desactualizada: se reintenta en el proximo abrir/compartir/descargar
+      } finally {
+        sincronizacionesEnCurso.delete(dni);
+      }
+    })();
+    sincronizacionesEnCurso.set(dni, tarea);
+    return tarea;
   }
 
   async function descargarCarpetaUsuario(dni) {
@@ -565,7 +690,9 @@ export function montarRenovacion() {
       root.file(archivo.name, desdeBase64(r.datos));
     }
 
-    const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
+    // PDF, PNG y .docx ya vienen comprimidos por dentro: DEFLATE aca solo
+    // gasta CPU sin bajar el tamano, y eso pesa mas en un celular que en una PC.
+    const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -589,6 +716,7 @@ export function montarRenovacion() {
     card.querySelector(".campo-area").classList.toggle("editado", actual.area !== undefined);
     pintarBarraEdicion(card, ficha);
     refrescarFotocheck(dni);
+    programarSincronizacion(dni);
   }
 
   /**
@@ -811,8 +939,12 @@ export function montarRenovacion() {
       `<input type="date" data-emo-venc value="${persona.vencimientoEmo || ""}" aria-label="Vencimiento del EMO" /></label>` +
       `<label class="campo-ficha campo-area${datosEdit.area !== undefined ? " editado" : ""}" title="Área de la planilla. Se imprime en el fotocheck y se puede corregir aquí"><span>ÁREA</span>` +
       `<input type="text" id="area-${dni}" data-area value="${escaparHtml(persona.area)}" placeholder="sin área" autocomplete="off" aria-label="Área" /></label>` +
+      (datos.fotoResuelta && !datos.foto
+        ? `<button type="button" class="btn btn-warn btn-sm" data-agregar-foto="${dni}" title="No se encontró la foto de esta persona en la carpeta FOTOS de Drive. Toca para tomarla con la cámara o elegirla de la galería">SIN FOTO · AGREGAR</button>`
+        : "") +
       `<button type="button" class="btn btn-fotocheck" data-fotocheck="${dni}" aria-pressed="${fotocheckAbiertoDe(dni)}" title="Muestra el fotocheck y lo mantiene al día con las fechas y los tipos que edites">${ICONO_FOTOCHECK}<span data-texto>${textoBotonFotocheck(fotocheckAbiertoDe(dni))}</span></button>` +
-      `<button type="button" class="btn btn-ghost btn-sm btn-antiguo" data-antiguo="${dni}" title="Pide primero el ANVERSO y luego el REVERSO del carnet físico antiguo: la app las combina en una sola imagen y va debajo del fotocheck nuevo en el Word">${datos.antiguoManual ? "ANTIGUO ✓ CAMBIAR" : "FOTOCHECK ANTIGUO"}</button>` +
+      `<button type="button" class="btn btn-ghost btn-sm btn-antiguo" data-antiguo-anverso="${dni}" title="Foto del ANVERSO del carnet físico antiguo. Si es la primera vez, después te pide el reverso; se combinan en una sola imagen debajo del fotocheck nuevo en el Word">${datos.antiguoAnversoFile ? "ANVERSO ✓" : "ANVERSO"}</button>` +
+      `<button type="button" class="btn btn-ghost btn-sm btn-antiguo" data-antiguo-reverso="${dni}" title="Foto del REVERSO del carnet físico antiguo. Si es la primera vez, después te pide el anverso; se combinan en una sola imagen debajo del fotocheck nuevo en el Word">${datos.antiguoReversoFile ? "REVERSO ✓" : "REVERSO"}</button>` +
       (datos.antiguoManual ? `<button type="button" class="btn btn-ghost btn-sm" data-antiguo-quitar="${dni}" title="Quitar el fotocheck antiguo adjuntado">QUITAR</button>` : "") +
       `</div>` +
       `<label class="aplicar-c"><span>FECHA C</span><input type="date" data-fecha-c title="Fecha de capacitación que se aplica como C a las tarjetas seleccionadas" /><button class="btn btn-warn btn-sm" data-aplicar-c disabled>APLICAR C</button></label>` +
@@ -832,43 +964,65 @@ export function montarRenovacion() {
       (enlace ? `<div class="card-acciones">${enlace}</div>` : "");
 
     card.querySelector("[data-fotocheck]")?.addEventListener("click", () => alternarFotocheck(dni));
-    card.querySelector("[data-antiguo]")?.addEventListener("click", () => elegirFotocheckAntiguo(dni));
+    card.querySelector("[data-agregar-foto]")?.addEventListener("click", () => agregarFotoPersona(dni));
+    card.querySelector("[data-antiguo-anverso]")?.addEventListener("click", () => elegirLadoAntiguo(dni, "anverso"));
+    card.querySelector("[data-antiguo-reverso]")?.addEventListener("click", () => elegirLadoAntiguo(dni, "reverso"));
     card.querySelector("[data-antiguo-quitar]")?.addEventListener("click", () => quitarFotocheckAntiguo(dni));
     card.querySelector("[data-carpeta-abrir]")?.addEventListener("click", async (ev) => {
       ev.preventDefault();
       const folderId = fichas.get(dni)?.salida?.carpetaId || fichas.get(dni)?.carpetaId;
       if (!folderId) return;
-      if (!(await sincronizarSalidaEnDrive(dni))) {
-        notificar("No se pudo actualizar la carpeta", "Se abre igual, pero podría no traer los últimos cambios de la ficha.", "warn");
+      const boton = ev.currentTarget;
+      marcarOcupado(boton, true); // respuesta al toque: lo normal es que ya este sincronizado y esto dure un instante
+      try {
+        if (!(await sincronizarSalidaEnDrive(dni))) {
+          notificar("No se pudo actualizar la carpeta", "Se abre igual, pero podría no traer los últimos cambios de la ficha.", "warn");
+        }
+        window.open(`https://drive.google.com/drive/folders/${folderId}`, "_blank", "noopener,noreferrer");
+      } finally {
+        marcarOcupado(boton, false);
       }
-      window.open(`https://drive.google.com/drive/folders/${folderId}`, "_blank", "noopener,noreferrer");
     });
     card.querySelector("[data-carpeta-whatsapp]")?.addEventListener("click", async (ev) => {
       ev.preventDefault();
       const href = ev.currentTarget.href;
-      if (!(await sincronizarSalidaEnDrive(dni))) {
-        notificar("No se pudo actualizar la carpeta", "Se comparte igual, pero podría no traer los últimos cambios de la ficha.", "warn");
-      }
-      // El navegador suele bloquear window.open() aca porque ya pasamos por un
-      // await (sincronizarSalidaEnDrive): para cuando se llama, el clic que lo
-      // habilitaba ya no cuenta como gesto del usuario. Si lo bloquea, se copia
-      // el mensaje para que se pueda pegar y compartir a mano.
-      let ventana = null;
+      const boton = ev.currentTarget;
+      marcarOcupado(boton, true);
       try {
-        ventana = window.open(href, "_blank", "noopener,noreferrer");
-      } catch {
-        ventana = null;
-      }
-      if (!ventana) {
-        const copiado = await copiarTexto(textoWhatsapp);
-        notificar(
-          copiado ? "WhatsApp no se pudo abrir" : "No se pudo abrir WhatsApp ni copiar el mensaje",
-          copiado ? "Se copió el mensaje: pégalo donde quieras compartirlo." : "Copia a mano el enlace de la carpeta.",
-          "warn"
-        );
+        if (!(await sincronizarSalidaEnDrive(dni))) {
+          notificar("No se pudo actualizar la carpeta", "Se comparte igual, pero podría no traer los últimos cambios de la ficha.", "warn");
+        }
+        // El navegador suele bloquear window.open() aca porque ya pasamos por un
+        // await (sincronizarSalidaEnDrive): para cuando se llama, el clic que lo
+        // habilitaba ya no cuenta como gesto del usuario. Si lo bloquea, se copia
+        // el mensaje para que se pueda pegar y compartir a mano.
+        let ventana = null;
+        try {
+          ventana = window.open(href, "_blank", "noopener,noreferrer");
+        } catch {
+          ventana = null;
+        }
+        if (!ventana) {
+          const copiado = await copiarTexto(textoWhatsapp);
+          notificar(
+            copiado ? "WhatsApp no se pudo abrir" : "No se pudo abrir WhatsApp ni copiar el mensaje",
+            copiado ? "Se copió el mensaje: pégalo donde quieras compartirlo." : "Copia a mano el enlace de la carpeta.",
+            "warn"
+          );
+        }
+      } finally {
+        marcarOcupado(boton, false);
       }
     });
-    card.querySelector("[data-carpeta-zip]")?.addEventListener("click", () => descargarCarpetaUsuario(dni));
+    card.querySelector("[data-carpeta-zip]")?.addEventListener("click", async (ev) => {
+      const boton = ev.currentTarget;
+      marcarOcupado(boton, true);
+      try {
+        await descargarCarpetaUsuario(dni);
+      } finally {
+        marcarOcupado(boton, false);
+      }
+    });
 
     const campoEmo = card.querySelector("[data-emo-venc]");
     enlazarFecha(campoEmo, () => datosVisibles(fichas.get(dni)).emoVenc, (valor) => editarDatos(dni, card, { emoVenc: valor }));
@@ -1062,6 +1216,7 @@ export function montarRenovacion() {
       ficha.salidaDesactualizada = true;
       fichas.set(dni, ficha);
       pintarFicha(dni, ficha);
+      programarSincronizacion(dni, 0);
       confirmarGuardado(guardado, elegidas, `C aplicada a ${elegidas.length} tarjeta(s)${fecha ? ` con fecha ${aFormatoCorto(fecha)}` : " (campos limpiados)"}`);
     } catch (e) {
       actualizarSeleccion(card, ficha);
@@ -1181,9 +1336,17 @@ export function montarRenovacion() {
             continue;
           }
 
-          // el fotocheck antiguo adjuntado a mano (boton de la ficha) no viene
-          // de esta corrida: se rescata de la ficha anterior para no perderlo.
-          const antiguoManual = fichas.get(obj.dni)?.antiguoManual || null;
+          // el fotocheck antiguo adjuntado a mano (botones de la ficha) no viene
+          // de esta corrida: se rescata de la ficha anterior para no perderlo,
+          // anverso y reverso por separado (por si luego se reemplaza uno solo).
+          const anterior = fichas.get(obj.dni);
+          const antiguoManual = anterior?.antiguoManual || null;
+          const antiguoAnversoFile = anterior?.antiguoAnversoFile || null;
+          const antiguoReversoFile = anterior?.antiguoReversoFile || null;
+          // igual que el antiguo: si la foto se agrego a mano y la subida a
+          // FOTOS fallo (o Drive todavia no la indexa), no se pierde al
+          // volver a correr la lista.
+          const fotoManual = anterior?.fotoManual || null;
 
           const ficha = {
             persona: r.despues,
@@ -1198,6 +1361,8 @@ export function montarRenovacion() {
             seleccion: new Set(),
             consulta: soloConsulta,
             antiguoManual,
+            antiguoAnversoFile,
+            antiguoReversoFile,
           };
           pintarFicha(obj.dni, ficha);
           if (r.resumen) {
@@ -1229,6 +1394,14 @@ export function montarRenovacion() {
             Object.assign(ficha, await materialFotocheck(r.despues, senal));
             if (antiguoManual) ficha.antiguo = antiguoManual;
           }
+          // Drive no tenia la foto (o no se pudo bajar): si se habia agregado
+          // a mano en una corrida anterior, se usa esa en vez de dejar la
+          // ficha sin foto. `fotoResuelta` recien queda en true aca: hasta
+          // este punto no se sabe todavia si hay foto o no, y la tarjeta no
+          // debe ofrecer "agregar foto" mientras se sigue buscando.
+          if (!ficha.foto && fotoManual) ficha.foto = fotoManual;
+          ficha.fotoManual = fotoManual;
+          ficha.fotoResuelta = true;
           pintarFicha(obj.dni, ficha);
         } catch (e) {
           if (senal.aborted) break;

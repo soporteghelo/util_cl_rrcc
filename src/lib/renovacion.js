@@ -40,9 +40,16 @@ export async function cargarContexto(senal) {
  * Todo el personal de `BD AESA`, para el reporte de vencimientos por RRCC.
  * Una sola llamada trae a todo el mundo en vez de consultar persona por
  * persona; cada elemento ya viene con la forma de `leerFila`.
+ *
+ * `filtro: "vencidos_activos"` le pide al backend que filtre ANTES de
+ * serializar: para "estado total" es la diferencia entre bajar a las 600+
+ * personas de la hoja (1.5+ MB, lo mas lento de la app) o solo a las pocas
+ * decenas que estan vencidas y activas. Un backend viejo que no reconozca el
+ * filtro simplemente lo ignora y sigue devolviendo a todo el mundo: por eso
+ * quien llama debe seguir filtrando del lado del navegador igual.
  */
-export async function listarPersonal(senal) {
-  const datos = await sheets({ accion: "listado" }, senal);
+export async function listarPersonal(senal, filtro) {
+  const datos = await sheets({ accion: "listado", filtro }, senal);
   return datos.personas || [];
 }
 
@@ -341,7 +348,7 @@ export async function generarSalidas(resultado, ctx, { log = () => {}, senal, av
     medidas: {
       fotocheckAnchoCm: Number(ctx.config.FOTOCHECK_ANCHO_CM || 10),
       fotocheckAltoCm: Number(ctx.config.FOTOCHECK_ALTO_CM || 8),
-      antiguoAnchoCm: Number(ctx.config.ANTIGUO_ANCHO_CM || 11.5),
+      antiguoAnchoCm: Number(ctx.config.ANTIGUO_ANCHO_CM || 17),
     },
   });
 

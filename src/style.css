@@ -184,6 +184,14 @@ h1 {
   white-space: nowrap;
 }
 
+.tag-btn {
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.tag-btn:hover { color: #eafcff; border-color: var(--cy); background: rgba(34, 211, 238, 0.16); }
+.tag-btn:disabled { cursor: wait; opacity: 0.6; }
+
 .head-ver { color: var(--tx-mute); letter-spacing: 0.14em; }
 
 /* ---------------- panel ---------------- */
@@ -299,6 +307,14 @@ h1 {
   #vista-renovacion .panel-res[hidden] + .panel-term { flex: 1 1 auto; }
 }
 
+/* Estado RRCC: la grilla de vencimientos por riesgo necesita todo el alto
+   posible; la consola se queda con la mitad de su reparto normal (38% -> 19%). */
+@media (min-width: 901px) {
+  #vista-estado .panel-res { flex: 1 1 81%; }
+  #vista-estado .panel-term { flex: 1 1 19%; min-height: 92px; }
+  #vista-estado .panel-res[hidden] + .panel-term { flex: 1 1 auto; }
+}
+
 /* ---------------- formulario ---------------- */
 
 .lbl {
@@ -370,6 +386,10 @@ h1 {
 
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* mismo look que :disabled, pero tambien sirve para <a> (que no tiene
+   :disabled): confirma que el clic ya se registro mientras se espera algo. */
+.btn.en-espera { opacity: 0.4; cursor: wait; pointer-events: none; }
 
 .btn-ghost:hover:not(:disabled) {
   border-color: var(--cy);
@@ -1443,7 +1463,26 @@ select.rc-tipo option { color: var(--tx); background: #05090f; }
   font-size: 11.5px;
 }
 
-.estado-grupo + .estado-grupo { margin-top: 16px; border-top: 1px dashed var(--line-soft); padding-top: 14px; }
+/* tres columnas, una por RRCC, para ver todo de un vistazo sin scrollear tanto */
+.estado-rrcc {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .estado-rrcc { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 700px) {
+  .estado-rrcc { grid-template-columns: 1fr; }
+}
+
+.estado-grupo {
+  min-width: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 10px;
+}
 
 .estado-grupo-head {
   display: flex;
@@ -1487,9 +1526,43 @@ select.rc-tipo option { color: var(--tx); background: #05090f; }
   color: var(--tx-dim);
   text-transform: uppercase;
 }
-.estado-tabla td:nth-child(2) { white-space: normal; min-width: 160px; }
-.estado-tabla td:nth-child(3) { white-space: normal; color: var(--tx-dim); }
+.estado-tabla td:nth-child(1),
+.estado-tabla td:nth-child(2) { white-space: normal; min-width: 90px; }
 .estado-tabla tbody tr:hover { background: rgba(34, 211, 238, 0.05); }
+
+/* Dentro de las 3 columnas de .estado-rrcc, una tabla en table-layout:auto
+   (el default) se estira hasta caber su celda mas ancha sin envolver texto
+   (Cargo, nombres largos) y se sale de su columna de grid, pisando la de al
+   lado. Con table-layout:fixed el ancho de cada columna queda fijo por lo
+   que se declara aca (no por el contenido, ni por una fila con colspan):
+   lo largo envuelve (Cargo y Nombres ya son white-space:normal mas abajo) en
+   vez de forzar la tabla. Con 5 columnas en el mismo ancho, letra e
+   interlineado tambien se achican para que Estado y Fecha no se pisen. */
+.estado-grupo .estado-tabla { table-layout: fixed; font-size: 10px; }
+.estado-grupo .estado-tabla th,
+.estado-grupo .estado-tabla td { padding: 4px 6px; }
+.estado-grupo .estado-tabla th { font-size: 8.5px; }
+.estado-grupo .et-badge { padding: 1px 6px; font-size: 8.5px; }
+.estado-grupo .estado-tabla col.ec-dni    { width: 12%; }
+.estado-grupo .estado-tabla col.ec-cargo  { width: 25%; }
+.estado-grupo .estado-tabla col.ec-nombre { width: 27%; }
+.estado-grupo .estado-tabla col.ec-estado { width: 18%; }
+.estado-grupo .estado-tabla col.ec-fecha  { width: 18%; }
+.estado-grupo .estado-tabla td:nth-child(2),
+.estado-grupo .estado-tabla td:nth-child(3) { white-space: normal; min-width: 0; }
+
+/* Encabezados ordenables: clic (o Enter/Espacio, son role=button) reordena
+   ese grupo por esa columna. La columna activa se resalta; la flechita de
+   direccion ya viene en el texto (ver estado.js). */
+.estado-grupo .estado-tabla th[data-campo] { cursor: pointer; user-select: none; }
+.estado-grupo .estado-tabla th[data-campo]:hover,
+.estado-grupo .estado-tabla th[data-campo]:focus-visible { color: var(--cy); }
+.estado-grupo .estado-tabla th.es-th-activo { color: var(--cy); }
+
+/* Fila con el titulo del grupo, oculta en pantalla (ya esta arriba, en
+   .estado-grupo-head) y solo visible al imprimir: ver el bloque @media
+   print para por que va dentro de <thead> en vez de ser un div aparte. */
+.estado-tabla-titulo { display: none; }
 
 .et-badge {
   display: inline-block;
@@ -1508,6 +1581,117 @@ tr.et-noaplica   { border-left: 3px solid var(--line); opacity: 0.6; }
 .et-actualizar .et-badge, .et-badge.et-actualizar { color: var(--am); }
 .et-vencido    .et-badge, .et-badge.et-vencido    { color: var(--rd); }
 .et-noaplica   .et-badge, .et-badge.et-noaplica   { color: var(--tx-mute); }
+
+/* ---------------- ESTADO TOTAL: dashboard, tabla clicable y flotante ---------------- */
+
+.et-dash {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.et-dash-card {
+  flex: 1 1 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--r);
+}
+.et-dash-num { font-size: 22px; font-weight: 700; color: var(--tx); line-height: 1.1; }
+.et-dash-lbl { font-size: 9.5px; letter-spacing: 0.06em; color: var(--tx-dim); text-transform: uppercase; }
+.et-dash-card.et-dash-vencido    { border-left-color: var(--rd); }
+.et-dash-card.et-dash-vencido    .et-dash-num { color: var(--rd); }
+.et-dash-card.et-dash-actualizar { border-left-color: var(--am); }
+.et-dash-card.et-dash-actualizar .et-dash-num { color: var(--am); }
+
+.et-tabla tbody tr.et-fila { cursor: pointer; }
+.et-tabla tbody tr.et-fila:hover,
+.et-tabla tbody tr.et-fila:focus-visible {
+  background: rgba(34, 211, 238, 0.1);
+  outline: none;
+}
+
+.et-flotante {
+  position: fixed;
+  z-index: 80;
+  min-width: 230px;
+  max-width: 320px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.6);
+  font-size: 11px;
+}
+.et-flotante-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-bottom: 7px;
+  margin-bottom: 7px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.et-flotante-head b {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11.5px;
+  color: var(--tx);
+}
+.et-flotante-head b span { font-size: 9.5px; font-weight: 400; color: var(--tx-dim); }
+.et-flotante-x {
+  flex: 0 0 auto;
+  background: none;
+  border: 0;
+  color: var(--tx-mute);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.et-flotante-x:hover { color: var(--tx); }
+.et-flotante-grupo + .et-flotante-grupo { margin-top: 8px; }
+.et-flotante-grupo b {
+  display: block;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.et-flotante-grupo b.et-vencido    { color: var(--rd); }
+.et-flotante-grupo b.et-actualizar { color: var(--am); }
+.et-flotante-grupo ul { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.et-flotante-grupo li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 0;
+  border-bottom: 1px dashed var(--line-soft);
+  color: var(--tx-dim);
+}
+.et-flotante-grupo li span:first-child { color: var(--tx); display: flex; align-items: center; gap: 6px; }
+
+.et-tipo {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  color: var(--tx-mute);
+}
+.et-tipo-a { color: var(--cy); }
+.et-tipo-c { color: var(--tx-dim); }
 
 /* ---------------- impresion ---------------- */
 
@@ -1533,11 +1717,37 @@ tr.et-noaplica   { border-left: 3px solid var(--line); opacity: 0.6; }
   #vista-estado .panel-head { display: none; }
   #vista-estado .panel-body { overflow: visible; padding: 0; }
 
+  /* en pantalla van en tres columnas; impreso, una sola columna es mas legible */
+  #vista-estado .estado-rrcc { display: block; }
+  #vista-estado .estado-grupo { border: none; padding: 0; }
+  #vista-estado .estado-grupo + .estado-grupo { margin-top: 16px; border-top: 1px dashed #999; padding-top: 14px; }
+
   .estado-grupo { break-inside: avoid-page; page-break-inside: avoid; }
-  .estado-grupo-head { color: #0a0a0a; break-after: avoid; }
-  .estado-grupo-head span { color: #0a0a0a; border-color: #999; }
+
+  /* El titulo del grupo (arriba, fuera de la tabla) no se repite si la
+     tabla es larga y se corta en varias hojas: solo <thead> se repite en
+     cada hoja al imprimir. Por eso el titulo real que se imprime es la fila
+     .estado-tabla-titulo de dentro del <thead> (ver htmlDeGrupo en
+     estado.js); este div de pantalla se oculta para no duplicarlo. */
+  .estado-grupo-head { display: none; }
+  .estado-tabla-titulo { display: table-row; }
   .estado-tabla th, .estado-tabla td { border-color: #ccc; color: #0a0a0a; white-space: normal; }
-  .estado-tabla td:nth-child(3) { color: #333; }
+  .estado-tabla-titulo th {
+    padding: 12px 4px 10px !important;
+    border-bottom: 2px solid #0a0a0a !important;
+    font-size: 28pt !important;
+    line-height: 1.08 !important;
+    font-weight: 900 !important;
+    letter-spacing: 0.02em !important;
+    text-transform: uppercase !important;
+    text-align: left !important;
+  }
+
+  #vista-estado .estado-grupo-head {
+    font-size: 22pt !important;
+    line-height: 1.2 !important;
+    color: #111 !important;
+  }
   tr.et-vigente    { background: none; border-left-color: #0a7a3c; }
   tr.et-actualizar { background: #fff7e0; border-left-color: #a66a00; }
   tr.et-vencido    { background: #ffecec; border-left-color: #a3122a; }

@@ -89,7 +89,7 @@ export function montarModalFotocheck() {
       medidas: {
         fotocheckAnchoCm: Number(config.FOTOCHECK_ANCHO_CM || 10),
         fotocheckAltoCm: Number(config.FOTOCHECK_ALTO_CM || 8),
-        antiguoAnchoCm: Number(config.ANTIGUO_ANCHO_CM || 11.5),
+        antiguoAnchoCm: Number(config.ANTIGUO_ANCHO_CM || 17),
       },
     });
     descargarBlob(docx, `Autorizacion_RRCC_${persona.nombreCompleto || persona.dni}.docx`);

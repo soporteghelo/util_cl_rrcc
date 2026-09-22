@@ -835,6 +835,58 @@ export function tiposDeMatriz(filas, cargo, area) {
   return tipos;
 }
 
+function distanciaEdicion(a, b) {
+  const fila = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) fila[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    let anterior = fila[0];
+    fila[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const actual = fila[j];
+      fila[j] = a[i - 1] === b[j - 1] ? anterior : 1 + Math.min(anterior, fila[j], fila[j - 1]);
+      anterior = actual;
+    }
+  }
+  return fila[b.length];
+}
+
+/**
+ * Cargo de la matriz mas parecido al escrito, para avisar de un typo cuando
+ * `tiposDeMatriz` no encuentra fila exacta (la planilla arrastra variantes:
+ * "MAESTO" por "MAESTRO", "BODEQUERO" por "BODEGUERO"...).
+ *
+ * Solo sugiere si esta a 1-2 ediciones: mas que eso ya es "otro cargo
+ * distinto" y sugerirlo confundiria mas de lo que ayuda. Nunca se usa para
+ * decidir las "A" solo, para que el usuario decida con la sugerencia en la mano.
+ */
+export function cargoMasParecido(filas, cargo) {
+  if (!filas || !filas.length) return null;
+  const norm = (s) => String(s === undefined || s === null ? "" : s).trim().toUpperCase();
+  const objetivo = norm(cargo);
+  if (!objetivo) return null;
+
+  const cab = filas[0].map(norm);
+  const iCargo = cab.indexOf("CARGO");
+  if (iCargo < 0) return null;
+
+  const candidatos = new Set();
+  for (const fila of filas.slice(1)) {
+    const fc = norm(fila[iCargo]);
+    if (fc) candidatos.add(fc);
+  }
+
+  let mejor = null;
+  let mejorDistancia = Infinity;
+  for (const c of candidatos) {
+    const d = distanciaEdicion(objetivo, c);
+    if (d < mejorDistancia) {
+      mejorDistancia = d;
+      mejor = c;
+    }
+  }
+  return mejor && mejorDistancia > 0 && mejorDistancia <= 2 ? mejor : null;
+}
+
 /* ------------------------------------------------------------------ */
 /* Vencimientos por RRCC (reporte de estado, para imprimir)            */
 /* ------------------------------------------------------------------ */
@@ -843,8 +895,10 @@ export function tiposDeMatriz(filas, cargo, area) {
  * Agrupa personas (formato `leerFila`) por RRCC para el reporte de
  * vencimientos: una lista por riesgo, cada una ordenada por dias restantes
  * hasta su vigencia (vencido primero, con los dias negativos que le tocan) o
- * al reves si `descendente` es true. Solo entran los riesgos con capacitacion
- * registrada: sin fecha no hay nada que ordenar ni que imprimir.
+ * al reves si `descendente` es true. Solo entran los riesgos tipo "A"
+ * (autorizacion, respaldada por certificado) con capacitacion registrada:
+ * los "C" (solo capacitacion) no se reportan aca, y sin fecha no hay nada
+ * que ordenar ni que imprimir.
  *
  * El estado se recalcula con `estadoDe` en vez de leer el ESTADO ya guardado
  * en la fila: ese valor puede ser un texto escrito la ultima vez que se
@@ -859,6 +913,7 @@ export function personasPorRiesgo(personas, opciones = {}) {
   const grupos = new Map(CODIGOS_RRCC.map((c) => [c, []]));
   for (const persona of personas || []) {
     for (const riesgo of persona.riesgos || []) {
+      if (riesgo.tipo !== "A") continue;
       if (!riesgo.cap) continue;
       const venc = riesgo.venc || sumarDias(riesgo.cap, vencido);
       const dias = diasEntre(hoy, venc);
@@ -872,6 +927,31 @@ export function personasPorRiesgo(personas, opciones = {}) {
     items.sort((a, b) => (descendente ? b.dias - a.dias : a.dias - b.dias));
     return { codigo: def.codigo, nombre: def.nombre, rotulo: def.rotulo, items };
   });
+}
+
+/**
+ * RRCC de UNA persona que estan vencidos o por vencer (ACTUALIZAR), para el
+ * detalle que se muestra al hacer clic sobre alguien en el reporte de
+ * "estado total". Igual que `personasPorRiesgo`, recalcula el estado con
+ * `estadoDe` en vez de confiar en el guardado en la fila.
+ */
+export function riesgosProblemaDe(persona, opciones = {}) {
+  const hoy = opciones.hoy || hoyIso();
+  const umbrales = opciones.umbrales || {};
+  const vencido = Number(umbrales.vencido === undefined ? UMBRAL_VENCIDO : umbrales.vencido);
+
+  const vencidos = [];
+  const porVencer = [];
+  for (const riesgo of persona?.riesgos || []) {
+    if (!riesgo.cap) continue;
+    const venc = riesgo.venc || sumarDias(riesgo.cap, vencido);
+    const item = { ...riesgo, venc, dias: diasEntre(hoy, venc), estado: estadoDe(riesgo.cap, hoy, umbrales) };
+    if (item.estado === "VENCIDO") vencidos.push(item);
+    else if (item.estado === "ACTUALIZAR") porVencer.push(item);
+  }
+  vencidos.sort((a, b) => a.dias - b.dias);
+  porVencer.sort((a, b) => a.dias - b.dias);
+  return { vencidos, porVencer };
 }
 
 /* ------------------------------------------------------------------ */

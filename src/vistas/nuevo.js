@@ -14,7 +14,7 @@ import { normalizarDni } from "../lib/dni.js";
 import { aFormatoCorto } from "../../shared/estados.js";
 import { sheets } from "../lib/api.js";
 import { cargarContexto, altaPersona, generarSalidas, subirFoto } from "../lib/renovacion.js";
-import { tiposDeMatriz } from "../../shared/estados.js";
+import { tiposDeMatriz, cargoMasParecido } from "../../shared/estados.js";
 import { RRCC } from "../../shared/rrcc.js";
 import { autocompletar } from "./autocompletar.js";
 
@@ -150,7 +150,9 @@ export function montarNuevo({ obtenerContexto } = {}) {
     }
     // Solo al confirmar (change): mientras se teclea, casi todo es "sin fila".
     if (!n && cargo && evento.type === "change") {
-      consola(`la matriz no tiene fila para "${cargo}" / "${el.area.value}": marca las A a mano`, "warn");
+      const sugerido = cargoMasParecido(contexto.matriz, cargo);
+      const pista = sugerido ? ` — ¿es un typo de "${sugerido}"?` : "";
+      consola(`la matriz no tiene fila para "${cargo}" / "${el.area.value}": marca las A a mano${pista}`, "warn");
     }
   }
 

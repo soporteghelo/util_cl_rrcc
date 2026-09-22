@@ -173,8 +173,11 @@ export async function descargarZip(objetivos, alProgreso) {
     }
   }
 
+  // Los PDF ya vienen comprimidos por dentro: pasarlos por DEFLATE no baja
+  // el tamano casi nada y sí gasta CPU real en el "comprimiendo X%" — en un
+  // celular de gama media eso se nota mucho mas que en una PC.
   const blob = await zip.generateAsync(
-    { type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } },
+    { type: "blob", compression: "STORE" },
     (meta) => alProgreso?.(meta.percent)
   );
 
