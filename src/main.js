@@ -1,5 +1,8 @@
 /**
- * NEXA_CERT_EXTRACTOR — orquestador del navegador.
+ * Orquestador del navegador.
+ *
+ * Este archivo es la vista "CERTIFICADOS" (el extractor original) y ademas
+ * monta las otras dos pestanas: RENOVACION y NUEVO PERSONAL.
  *
  * El navegador dirige todo el proceso y las funciones serverless solo hacen de
  * proxy de una operacion cada una. Es la unica forma de que entre en Vercel:
@@ -18,6 +21,11 @@ import {
   guardarEnCarpeta,
   soportaCarpeta,
 } from "./lib/guardar.js";
+import { montarPestanas, notificar, pedirPermisoAviso } from "./vistas/comun.js";
+import { montarRenovacion } from "./vistas/renovacion.js";
+import { montarNuevo } from "./vistas/nuevo.js";
+import { montarEstado } from "./vistas/estado.js";
+import { montarModalFotocheck } from "./vistas/fotocheck-modal.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -240,64 +248,9 @@ el.btnDest.addEventListener("click", pedirCarpeta);
 /* Notificacion de fin                                                 */
 /* ------------------------------------------------------------------ */
 
-let cerrarToast = null;
-
-function notificar(titulo, detalle, tipo = "ok") {
-  // 1) aviso dentro de la pagina (siempre funciona)
-  clearTimeout(cerrarToast);
-  el.toast.className = `toast ${tipo === "ok" ? "" : tipo}`.trim();
-  el.toastIc.textContent = tipo === "ok" ? "✓" : "!";
-  el.toastTit.textContent = titulo;
-  el.toastSub.textContent = detalle;
-  el.toast.hidden = false;
-  // reinicia la animacion de la barra al reutilizar el mismo nodo
-  const barra = el.toast.querySelector(".toast-bar");
-  barra.style.animation = "none";
-  void barra.offsetWidth;
-  barra.style.animation = "";
-  cerrarToast = setTimeout(() => (el.toast.hidden = true), 12000);
-
-  // 2) notificacion del sistema, util si la pestana esta en segundo plano
-  try {
-    if ("Notification" in window && Notification.permission === "granted") {
-      const n = new Notification(titulo, { body: detalle, icon: "/favicon.svg", tag: "nexa-cert" });
-      n.onclick = () => {
-        window.focus();
-        n.close();
-      };
-    }
-  } catch {
-    /* algunos navegadores lanzan si la pagina no es segura */
-  }
-
-  // 3) pitido corto: en lotes largos avisa sin mirar la pantalla
-  if (tipo === "ok") pitido();
-}
-
-function pitido() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const t0 = ctx.currentTime;
-    for (const [i, hz] of [880, 1320].entries()) {
-      const osc = ctx.createOscillator();
-      const gan = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = hz;
-      gan.gain.setValueAtTime(0.0001, t0 + i * 0.11);
-      gan.gain.exponentialRampToValueAtTime(0.08, t0 + i * 0.11 + 0.01);
-      gan.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.11 + 0.1);
-      osc.connect(gan).connect(ctx.destination);
-      osc.start(t0 + i * 0.11);
-      osc.stop(t0 + i * 0.11 + 0.11);
-    }
-    setTimeout(() => ctx.close(), 600);
-  } catch {
-    /* sin audio disponible */
-  }
-}
+// `notificar` vive en vistas/comun.js porque las tres pestanas avisan igual.
 
 el.toastX.addEventListener("click", () => {
-  clearTimeout(cerrarToast);
   el.toast.hidden = true;
 });
 
@@ -322,7 +275,7 @@ const CLASE_ESTADO = {
   PENDIENTE: "st-wait",
 };
 
-const ORDEN_ORIGEN = ["JOMISER", "EIN", "DRIVE"];
+const ORDEN_ORIGEN = ["JOMISER", "EIN", "DRIVE", "INDUCCION"];
 
 /** Un PDF puede estar en memoria (pdf) o ya escrito en disco (guardado). */
 const obtenido = (it) => Boolean(it.pdf || it.guardado);
@@ -526,16 +479,17 @@ async function ejecutar() {
         pintar();
       }
 
-      const carriles = new Map();
-      for (const it of descargables) {
-        if (!carriles.has(it.origen)) carriles.set(it.origen, []);
-        carriles.get(it.origen).push(it);
-      }
-
+      // Acelera la extracción sin saturar al servidor: todas las descargas
+      // descargables se ejecutan en paralelo con un limite fijo. Si hay RRCC o
+      // cursos que no aportan PDF, no bloquean el resto del lote ni la
+      // generación del ZIP final del usuario.
+      const maxSimultaneas = Math.min(8, Math.max(2, descargables.length || 1));
+      let indice = 0;
       await Promise.all(
-        [...carriles.values()].map(async (items) => {
-          for (const it of items) {
-            if (senal.aborted) break;
+        Array.from({ length: maxSimultaneas }, async () => {
+          while (!senal.aborted && indice < descargables.length) {
+            const it = descargables[indice++];
+            if (!it) continue;
             await descargarUnItem(it);
           }
         })
@@ -614,13 +568,7 @@ el.run.addEventListener("click", async () => {
   // Permiso para avisar al terminar (los lotes tardan y se deja en 2º plano).
   // SIN await: el aviso del navegador se queda esperando respuesta y dejaria
   // la extraccion parada hasta que el usuario lo conteste.
-  try {
-    if ("Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission().catch(() => {});
-    }
-  } catch {
-    /* sin soporte de notificaciones */
-  }
+  pedirPermisoAviso();
 
   ejecutar();
 });
@@ -668,12 +616,26 @@ el.carpeta.addEventListener("click", async () => {
 
 (function arrancar() {
   const lineas = [
-    "NEXA_CERT_EXTRACTOR v2.0",
-    "objetivo: aula.jomiser.com",
+    "AESA_RRCC v3.0",
+    "fuentes: aula.jomiser.com · EIN/WebNexa · Drive",
     "al terminar se descargará un ZIP con los certificados",
     "esperando documentos...",
   ];
   lineas.forEach((t, i) => setTimeout(() => log(t, i === 0 ? "head" : "info"), i * 190));
   pintarDestino();
   refrescarConteo();
+
+  montarPestanas([
+    ["tab-certificados", "vista-certificados"],
+    ["tab-renovacion", "vista-renovacion"],
+    ["tab-nuevo", "vista-nuevo"],
+    ["tab-estado", "vista-estado"],
+  ]);
+  montarModalFotocheck();
+
+  // La renovacion carga CONFIG y el diccionario una sola vez; el alta de
+  // personal nuevo reutiliza ese mismo contexto en vez de volver a pedirlo.
+  const renovacion = montarRenovacion();
+  montarNuevo({ obtenerContexto: () => renovacion.contexto() });
+  montarEstado();
 })();

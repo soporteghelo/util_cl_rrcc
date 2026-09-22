@@ -1,0 +1,323 @@
+/**
+ * Fotocheck de Autorizacion de Riesgos Criticos: replica de la hoja
+ * FOTOCHEK del Excel, dibujada sobre un <canvas> y exportada a PNG.
+ *
+ * Por que canvas y no HTML->imagen: en Vercel no hay Chromium para renderizar
+ * del lado del servidor, y las librerias de "HTML a PNG" del navegador
+ * dependen de <foreignObject>, que ensucia el canvas en cuanto entra una
+ * imagen de otro origen (la foto de Drive) y deja de poder exportarse. Con
+ * canvas 2D el control es total, el resultado es identico en cualquier
+ * navegador y no hace falta ninguna dependencia.
+ *
+ * El lienzo base es de 1400 x 920 (la proporcion nativa del fotocheck que
+ * hoy se pega en el Word); `escala` lo multiplica para imprimir sin dientes.
+ */
+
+import { aFormatoCorto } from "../../shared/estados.js";
+
+/* Paleta tomada del fotocheck original. */
+const AZUL = "#002060";
+const GRIS_LOGO = "#929292";
+const BORDE = "#4472C4";
+const GRIS_A = "#BFBFBF";
+
+const BASE_W = 1400;
+const BASE_H = 920;
+
+const FUENTE = '"Arial Narrow", "Liberation Sans Narrow", Arial, Helvetica, sans-serif';
+
+/** Las dos filas en blanco que el fotocheck original deja al final. */
+const FILAS_RRCC = 8;
+
+/* ------------------------------------------------------------------ */
+/* Utilidades de dibujo                                                */
+/* ------------------------------------------------------------------ */
+
+function texto(ctx, t, x, y, { tam = 20, negrita = false, color = "#000", alineado = "left", ancho = 0 } = {}) {
+  const valor = String(t ?? "");
+  if (!valor) return;
+  let tamActual = tam;
+  ctx.font = `${negrita ? "bold " : ""}${tamActual}px ${FUENTE}`;
+  // el cargo y los apellidos largos no deben desbordar su casilla
+  if (ancho) {
+    while (tamActual > 8 && ctx.measureText(valor).width > ancho) {
+      tamActual -= 1;
+      ctx.font = `${negrita ? "bold " : ""}${tamActual}px ${FUENTE}`;
+    }
+  }
+  ctx.fillStyle = color;
+  ctx.textAlign = alineado;
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(valor, x, y);
+}
+
+function caja(ctx, x, y, w, h, { relleno = null, borde = null, grosor = 1.5 } = {}) {
+  if (relleno) {
+    ctx.fillStyle = relleno;
+    ctx.fillRect(x, y, w, h);
+  }
+  if (borde) {
+    ctx.strokeStyle = borde;
+    ctx.lineWidth = grosor;
+    ctx.strokeRect(x + grosor / 2, y + grosor / 2, w - grosor, h - grosor);
+  }
+}
+
+/** Carga una imagen desde una URL, data URI, blob o ArrayBuffer. null si no se puede. */
+export function cargarImagen(fuente) {
+  return new Promise((resolver) => {
+    if (!fuente) return resolver(null);
+
+    const prepararUrl = async () => {
+      if (fuente instanceof Blob) {
+        const bytes = new Uint8Array(await fuente.arrayBuffer());
+        let binario = "";
+        const trozo = 0x8000;
+        for (let i = 0; i < bytes.length; i += trozo) {
+          binario += String.fromCharCode(...bytes.subarray(i, i + trozo));
+        }
+        return `data:${fuente.type || "image/png"};base64,${btoa(binario)}`;
+      }
+      if (fuente instanceof ArrayBuffer || ArrayBuffer.isView(fuente)) {
+        const buffer = fuente instanceof ArrayBuffer ? fuente : fuente.buffer;
+        const bytes = new Uint8Array(buffer);
+        let binario = "";
+        const trozo = 0x8000;
+        for (let i = 0; i < bytes.length; i += trozo) {
+          binario += String.fromCharCode(...bytes.subarray(i, i + trozo));
+        }
+        return `data:image/png;base64,${btoa(binario)}`;
+      }
+      return fuente;
+    };
+
+    prepararUrl()
+      .then((url) => {
+        const img = new Image();
+        if (typeof url === "string" && !url.startsWith("data:") && !url.startsWith("blob:")) {
+          img.crossOrigin = "anonymous";
+        }
+        img.onload = () => resolver(img);
+        img.onerror = () => resolver(null);
+        img.src = url;
+      })
+      .catch(() => resolver(null));
+  });
+}
+
+/** Dibuja `img` dentro del rectangulo recortando lo que sobre (object-fit: cover). */
+function dibujarCubriendo(ctx, img, x, y, w, h) {
+  const escala = Math.max(w / img.width, h / img.height);
+  const aw = img.width * escala;
+  const ah = img.height * escala;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.drawImage(img, x + (w - aw) / 2, y + (h - ah) / 2, aw, ah);
+  ctx.restore();
+}
+
+/* ------------------------------------------------------------------ */
+/* Panel izquierdo: foto y datos                                       */
+/* ------------------------------------------------------------------ */
+
+function panelIzquierdo(ctx, p, foto, logo) {
+  const X = 12;
+  const Y = 6;
+  const W = 656;
+  const H = 906;
+
+  caja(ctx, X, Y, W, H, { relleno: AZUL, borde: BORDE, grosor: 3 });
+
+  if (logo) {
+    const alto = 118;
+    const ancho = (logo.width / logo.height) * alto;
+    ctx.drawImage(logo, X + 44, Y + 8, ancho, alto);
+  } else {
+    texto(ctx, "AESA", X + 44, Y + 108, { tam: 78, negrita: true, color: GRIS_LOGO });
+  }
+
+  /* Foto: marco blanco y recorte centrado. */
+  const fx = 196;
+  const fy = 138;
+  const fw = 256;
+  const fh = 288;
+  caja(ctx, fx - 4, fy - 4, fw + 8, fh + 8, { relleno: "#FFFFFF" });
+  if (foto) {
+    dibujarCubriendo(ctx, foto, fx, fy, fw, fh);
+  } else {
+    caja(ctx, fx, fy, fw, fh, { relleno: "#D9D9D9" });
+    texto(ctx, "SIN FOTO", fx + fw / 2, fy + fh / 2, { tam: 22, color: "#7F7F7F", alineado: "center" });
+  }
+
+  const centro = X + W / 2;
+  texto(ctx, "DNI", centro - 82, 448, { tam: 26, negrita: true, color: "#FFFFFF", alineado: "right" });
+  texto(ctx, p.dni, centro - 62, 448, { tam: 24, color: "#FFFFFF" });
+  texto(ctx, "Autorización Interna", centro, 484, { tam: 28, color: "#FFFFFF", alineado: "center" });
+  texto(ctx, "Riesgos Críticos de Seguridad", centro, 524, {
+    tam: 30,
+    negrita: true,
+    color: "#FFFFFF",
+    alineado: "center",
+  });
+
+  /* Recuadro blanco de datos. */
+  const dx = X + 4;
+  const dy = 558;
+  const dw = W - 8;
+  const dh = H + Y - dy - 6;
+  caja(ctx, dx, dy, dw, dh, { relleno: "#FFFFFF", borde: BORDE, grosor: 2 });
+
+  const etiqueta = dx + 12;
+  const valor = dx + 292;
+  const anchoValor = dw - 300;
+  const filas = [
+    ["Apellidos:", p.apellidos, 588, false],
+    ["Nombres:", p.nombres, 625, true],
+    ["Area:", p.area, 662, true],
+    ["Cargo", p.cargo, 734, true],
+    ["F. Ex. Médico:", aFormatoCorto(p.examenMedico), 806, true],
+    ["F. Vencimiento:", aFormatoCorto(p.vencimientoEmo), 838, true],
+    ["Uso de Lentes:", p.usoLentes, 880, true],
+  ];
+  for (const [cab, val, y, negrita] of filas) {
+    texto(ctx, cab, etiqueta, y, { tam: 25, negrita: true });
+    texto(ctx, val, valor, y, { tam: negrita ? 22 : 21, negrita, ancho: anchoValor });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Panel derecho: grilla de riesgos criticos                           */
+/* ------------------------------------------------------------------ */
+
+function panelDerecho(ctx, p) {
+  const X = 690;
+  const W = 700;
+  const columnas = 3;
+  const hueco = 16;
+  const anchoCol = (W - hueco * (columnas - 1)) / columnas;
+  const altoCaja = 38;
+  const paso = 71;
+  const y0 = 14;
+
+  for (let fila = 0; fila < FILAS_RRCC; fila++) {
+    for (let col = 0; col < columnas; col++) {
+      const r = p.riesgos[fila * columnas + col] || null;
+      const x = X + col * (anchoCol + hueco);
+      const yEtiqueta = y0 + fila * paso + 16;
+      const yCaja = y0 + fila * paso + 24;
+
+      texto(ctx, r ? r.rotulo : "-", x + anchoCol / 2, yEtiqueta, {
+        tam: 21,
+        alineado: "center",
+        ancho: anchoCol - 6,
+      });
+      caja(ctx, x, yCaja, anchoCol, altoCaja, { relleno: "#FFFFFF", borde: "#000000", grosor: 1.6 });
+      if (!r) continue;
+
+      /* La letra va en su propio recuadro a la derecha; "A" ademas sombreado. */
+      const anchoLetra = 40;
+      const xLetra = x + anchoCol - anchoLetra;
+      if (r.tipo === "A") caja(ctx, xLetra, yCaja, anchoLetra, altoCaja, { relleno: GRIS_A });
+      if (r.tipo) {
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(xLetra, yCaja);
+        ctx.lineTo(xLetra, yCaja + altoCaja);
+        ctx.stroke();
+        texto(ctx, r.tipo, xLetra + anchoLetra / 2, yCaja + 28, { tam: 24, negrita: true, alineado: "center" });
+      }
+      texto(ctx, aFormatoCorto(r.venc), x + (anchoCol - anchoLetra) / 2, yCaja + 28, {
+        tam: 24,
+        alineado: "center",
+        ancho: anchoCol - anchoLetra - 8,
+      });
+    }
+  }
+
+  /* AUTORIZADO / NO AUTORIZADO */
+  const yMarca = y0 + FILAS_RRCC * paso + 26;
+  const autorizado = p.estadoFinal === "VIGENTE" && p.riesgos.some((r) => r.tipo === "A");
+  const lado = 34;
+
+  caja(ctx, X + 72, yMarca - lado + 6, lado, lado, {
+    relleno: autorizado ? "#000000" : "#FFFFFF",
+    borde: "#000000",
+    grosor: 2,
+  });
+  texto(ctx, "AUTORIZADO", X + 118, yMarca, { tam: 26, negrita: true });
+
+  caja(ctx, X + 412, yMarca - lado + 6, lado, lado, {
+    relleno: autorizado ? "#FFFFFF" : "#000000",
+    borde: "#000000",
+    grosor: 2,
+  });
+  texto(ctx, "NO AUTORIZADO", X + 458, yMarca, { tam: 26, negrita: true });
+
+  /* Leyenda */
+  const ly = yMarca + 18;
+  const lh = BASE_H - ly - 12;
+  caja(ctx, X + 26, ly, W - 26, lh, { relleno: "#FFFFFF", borde: BORDE, grosor: 2.5 });
+
+  const lineas = [
+    ["IMPORTANTE:", "Lleve Usted esta autorizacion siempre"],
+    ["", "para mostrarla cada vez que sea requerida."],
+    ["", "Esta prohibida cualquier alteración de la Autorización;"],
+    ["", "las Areas de Serv. Grales y SSMA. Son las unicas áreas"],
+    ["", "permitidas para su modificación."],
+    ["A:", "AUTORIZADO"],
+    ["C:", "CAPACITADO"],
+  ];
+  let ty = ly + 26;
+  for (const [fuerte, resto] of lineas) {
+    let x = X + 38;
+    if (fuerte) {
+      texto(ctx, fuerte, x, ty, { tam: 22, negrita: true });
+      ctx.font = `bold 22px ${FUENTE}`;
+      x += ctx.measureText(fuerte).width + 5;
+    }
+    texto(ctx, resto, x, ty, { tam: 22 });
+    ty += 33;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* API publica                                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Dibuja el fotocheck de una persona y devuelve el canvas.
+ * `persona` es lo que devuelve `leerFila()` de estados.js.
+ */
+export async function dibujarFotocheck(persona, { foto = null, logo = "/logo-aesa.png", escala = 3 } = {}) {
+  const lienzo = document.createElement("canvas");
+  lienzo.width = Math.round(BASE_W * escala);
+  lienzo.height = Math.round(BASE_H * escala);
+
+  const ctx = lienzo.getContext("2d");
+  ctx.imageSmoothingQuality = "high";
+  ctx.scale(escala, escala);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, BASE_W, BASE_H);
+
+  const [imgFoto, imgLogo] = await Promise.all([
+    foto instanceof HTMLImageElement ? foto : cargarImagen(foto),
+    cargarImagen(logo),
+  ]);
+
+  panelIzquierdo(ctx, persona, imgFoto, imgLogo);
+  panelDerecho(ctx, persona);
+
+  return lienzo;
+}
+
+/** El fotocheck como PNG (Blob), listo para subir a Drive o meter en el Word. */
+export async function fotocheckPng(persona, opciones = {}) {
+  const lienzo = await dibujarFotocheck(persona, opciones);
+  const blob = await new Promise((r) => lienzo.toBlob(r, "image/png"));
+  return { blob, lienzo, ancho: lienzo.width, alto: lienzo.height };
+}
+
+export const PROPORCION = { ancho: BASE_W, alto: BASE_H };

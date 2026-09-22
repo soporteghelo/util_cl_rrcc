@@ -32,7 +32,8 @@ export default async function handler(req, res) {
       return;
     }
 
-    const pdf = body.origen === "DRIVE" ? await driveDescargar(body.id) : await jomiserDescargar(body.id);
+    const deDrive = body.origen === "DRIVE" || body.origen === "INDUCCION";
+    const pdf = deDrive ? await driveDescargar(body.id) : await jomiserDescargar(body.id);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Length", String(pdf.length));
     res.status(200).send(pdf);

@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#04070c" />
-    <meta name="description" content="Extractor de certificados por DNI - JOMISER" />
-    <title>NEXA // Extractor de Certificados</title>
+    <meta name="description" content="Certificados y Autorización de Riesgos Críticos — AESA / Cerro Lindo" />
+    <title>AESA // Riesgos Críticos</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -23,107 +23,444 @@
       <header class="head">
         <div class="head-l">
           <span class="dot"></span>
-          <h1 class="glitch" data-text="EXTRACTOR DE CERTIFICADOS">EXTRACTOR DE CERTIFICADOS</h1>
+          <h1 class="glitch" data-text="RIESGOS CRÍTICOS">RIESGOS CRÍTICOS</h1>
         </div>
+
+        <nav class="tabs" role="tablist" aria-label="Secciones">
+          <button class="tab activo" id="tab-certificados" type="button" role="tab" aria-selected="true">
+            CERTIFICADOS
+          </button>
+          <button class="tab" id="tab-renovacion" type="button" role="tab" aria-selected="false">
+            RENOVACIÓN
+          </button>
+          <button class="tab" id="tab-nuevo" type="button" role="tab" aria-selected="false">
+            NUEVO PERSONAL
+          </button>
+          <button class="tab" id="tab-estado" type="button" role="tab" aria-selected="false">
+            ESTADO RRCC
+          </button>
+        </nav>
+
         <div class="head-r">
-          <span class="tag">JOMISER</span>
-          <span class="head-ver">v2.0</span>
+          <span class="tag" id="estado-base" title="Estado de la base en Google Sheets">BASE ?</span>
+          <span class="head-ver">v3.0</span>
         </div>
       </header>
 
-      <!-- ================= COLUMNA IZQUIERDA: ENTRADA ================= -->
-      <div class="col col-in">
-        <section class="panel panel-obj" aria-labelledby="t-target">
-          <div class="panel-head">
-            <h2 id="t-target">01 · OBJETIVOS</h2>
-            <span class="count" id="dni-count">0 DNI</span>
-          </div>
-
-          <div class="panel-body panel-body-col">
-            <label class="lbl" for="dnis">Documentos — uno por línea</label>
-            <textarea
-              id="dnis"
-              class="ta"
-              spellcheck="false"
-              autocomplete="off"
-              placeholder="71481337&#10;07481337&#10;43644102"
-            ></textarea>
-
-            <div class="row-btns">
-              <label class="btn btn-ghost" for="archivo">
-                <svg viewBox="0 0 24 24" class="ic"><path d="M12 16V4m0 0L8 8m4-4 4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
-                EXCEL / CSV
-              </label>
-              <input id="archivo" type="file" accept=".xlsx,.xlsm,.csv,.txt" hidden />
-              <button class="btn btn-ghost" id="btn-limpiar" type="button">LIMPIAR</button>
+      <!-- ============================================================= -->
+      <!-- VISTA 1 · EXTRACTOR DE CERTIFICADOS                            -->
+      <!-- ============================================================= -->
+      <div class="vista" id="vista-certificados">
+        <div class="col col-in">
+          <section class="panel panel-obj" aria-labelledby="t-target">
+            <div class="panel-head">
+              <h2 id="t-target">01 · OBJETIVOS</h2>
+              <span class="count" id="dni-count">0 DNI</span>
             </div>
 
-            <div class="avisos">
-              <div id="aviso-ceros" class="alert alert-warn" hidden></div>
-              <div id="aviso-archivo" class="alert alert-info" hidden></div>
-            </div>
-          </div>
-        </section>
+            <div class="panel-body panel-body-col">
+              <label class="lbl" for="dnis">Documentos — uno por línea</label>
+              <textarea
+                id="dnis"
+                class="ta"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="71481337&#10;07481337&#10;43644102"
+              ></textarea>
 
-        <section class="panel panel-go">
-          <div class="panel-body">
-            <div class="dest" id="dest-row">
-              <span class="lbl dest-lbl">Carpeta de guardado</span>
-              <div class="dest-box">
-                <svg viewBox="0 0 24 24" class="ic dest-ic"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-                <span class="dest-txt" id="dest-txt">sin elegir — se pedirá al iniciar</span>
-                <button class="btn btn-mini" id="btn-dest" type="button">ELEGIR</button>
+              <div class="row-btns">
+                <label class="btn btn-ghost" for="archivo">
+                  <svg viewBox="0 0 24 24" class="ic"><path d="M12 16V4m0 0L8 8m4-4 4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+                  EXCEL / CSV
+                </label>
+                <input id="archivo" type="file" accept=".xlsx,.xlsm,.csv,.txt" hidden />
+                <button class="btn btn-ghost" id="btn-limpiar" type="button">LIMPIAR</button>
+              </div>
+
+              <div class="avisos">
+                <div id="aviso-ceros" class="alert alert-warn" hidden></div>
+                <div id="aviso-archivo" class="alert alert-info" hidden></div>
               </div>
             </div>
+          </section>
 
-            <button class="btn btn-go" id="btn-run" type="button">
-              <span class="go-txt">INICIAR EXTRACCIÓN</span>
-              <span class="go-arrow">▸</span>
-            </button>
-            <button class="btn btn-stop" id="btn-stop" type="button" hidden>ABORTAR</button>
+          <section class="panel panel-go">
+            <div class="panel-body">
+              <div class="dest" id="dest-row">
+                <span class="lbl dest-lbl">Carpeta de guardado</span>
+                <div class="dest-box">
+                  <svg viewBox="0 0 24 24" class="ic dest-ic"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+                  <span class="dest-txt" id="dest-txt">sin elegir — se pedirá al iniciar</span>
+                  <button class="btn btn-mini" id="btn-dest" type="button">ELEGIR</button>
+                </div>
+              </div>
 
-            <div class="bar-wrap" id="bar-wrap" hidden>
-              <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
-              <div class="bar-meta">
-                <span id="bar-txt">en espera</span>
-                <span id="bar-pct">0%</span>
+              <button class="btn btn-go" id="btn-run" type="button">
+                <span class="go-txt">INICIAR EXTRACCIÓN</span>
+                <span class="go-arrow">▸</span>
+              </button>
+              <button class="btn btn-stop" id="btn-stop" type="button" hidden>ABORTAR</button>
+
+              <div class="bar-wrap" id="bar-wrap" hidden>
+                <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+                <div class="bar-meta">
+                  <span id="bar-txt">en espera</span>
+                  <span id="bar-pct">0%</span>
+                </div>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
+        </div>
+
+        <div class="col col-out">
+          <section class="panel panel-res" id="panel-res" hidden aria-labelledby="t-res">
+            <div class="panel-head">
+              <h2 id="t-res">02 · RESULTADOS</h2>
+              <span class="count" id="res-count"></span>
+            </div>
+            <div class="panel-body panel-body-scroll">
+              <div id="resultados" class="res"></div>
+            </div>
+            <div class="panel-foot" id="acciones-guardar" hidden>
+              <button class="btn btn-go btn-sm" id="btn-zip" type="button">DESCARGAR ZIP</button>
+              <button class="btn btn-ghost btn-sm" id="btn-carpeta" type="button" hidden>
+                GUARDAR EN CARPETA
+              </button>
+            </div>
+          </section>
+
+          <section class="panel panel-term" aria-labelledby="t-log">
+            <div class="panel-head">
+              <h2 id="t-log">03 · CONSOLA</h2>
+              <button class="lnk" id="btn-log-clear" type="button">limpiar</button>
+            </div>
+            <div class="panel-body panel-body-flush">
+              <div class="term" id="term" role="log" aria-live="polite"></div>
+            </div>
+          </section>
+        </div>
       </div>
 
-      <!-- ================= COLUMNA DERECHA: SALIDA ================= -->
-      <div class="col col-out">
-        <section class="panel panel-res" id="panel-res" hidden aria-labelledby="t-res">
-          <div class="panel-head">
-            <h2 id="t-res">02 · RESULTADOS</h2>
-            <span class="count" id="res-count"></span>
-          </div>
-          <div class="panel-body panel-body-scroll">
-            <div id="resultados" class="res"></div>
-          </div>
-          <div class="panel-foot" id="acciones-guardar" hidden>
-            <button class="btn btn-go btn-sm" id="btn-zip" type="button">DESCARGAR ZIP</button>
-            <button class="btn btn-ghost btn-sm" id="btn-carpeta" type="button" hidden>
-              GUARDAR EN CARPETA
-            </button>
-          </div>
-        </section>
+      <!-- ============================================================= -->
+      <!-- VISTA 2 · RENOVACIÓN DE AUTORIZACIONES                        -->
+      <!-- ============================================================= -->
+      <div class="vista" id="vista-renovacion" hidden>
+        <div class="col col-in">
+          <section class="panel panel-obj">
+            <div class="panel-head">
+              <h2>01 · PERSONAL A RENOVAR</h2>
+              <span class="count" id="rn-count">0 DNI</span>
+            </div>
+            <div class="panel-body panel-body-col">
+              <label class="lbl" for="rn-dnis">Documentos — uno por línea</label>
+              <textarea
+                id="rn-dnis"
+                class="ta"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="40018082&#10;71871839"
+              ></textarea>
 
-        <section class="panel panel-term" aria-labelledby="t-log">
-          <div class="panel-head">
-            <h2 id="t-log">03 · CONSOLA</h2>
-            <button class="lnk" id="btn-log-clear" type="button">limpiar</button>
-          </div>
-          <div class="panel-body panel-body-flush">
-            <div class="term" id="term" role="log" aria-live="polite"></div>
-          </div>
-        </section>
+              <div class="row-btns">
+                <label class="btn btn-ghost" for="rn-archivo">
+                  <svg viewBox="0 0 24 24" class="ic"><path d="M12 16V4m0 0L8 8m4-4 4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+                  EXCEL / CSV
+                </label>
+                <input id="rn-archivo" type="file" accept=".xlsx,.xlsm,.csv,.txt" hidden />
+                <button class="btn btn-ghost" id="rn-limpiar" type="button">LIMPIAR</button>
+              </div>
+
+              <div class="avisos">
+                <div id="rn-aviso" class="alert alert-info" hidden></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel panel-go">
+            <div class="panel-body">
+              <label class="check">
+                <input type="checkbox" id="rn-salidas" checked />
+                <span>Generar carpeta en <code>RRCC/DATA</code> (certificados + fotocheck + Word)</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="rn-escribir" checked />
+                <span>Escribir los cambios en la hoja <code>BD AESA</code></span>
+              </label>
+
+              <div class="row-btns">
+                <button class="btn btn-ghost" id="rn-consultar" type="button"
+                        title="Trae los datos de la persona y verifica sus &quot;A&quot; contra JOMISER, EIN y Drive. No escribe nada.">
+                  CONSULTAR Y COMPARAR
+                </button>
+                <button class="btn btn-ghost" id="rn-setup" type="button"
+                        title="Crea CURSO_RRCC, MATRIZ_PUESTO y CONFIG. No toca BD AESA.">
+                  CONFIGURAR BASE
+                </button>
+              </div>
+
+              <button class="btn btn-go" id="rn-run" type="button">
+                <span class="go-txt">RENOVAR AUTORIZACIONES</span>
+                <span class="go-arrow">▸</span>
+              </button>
+              <button class="btn btn-stop" id="rn-stop" type="button" hidden>ABORTAR</button>
+
+              <div class="bar-wrap" id="rn-bar-wrap" hidden>
+                <div class="bar"><div class="bar-fill" id="rn-bar-fill"></div></div>
+                <div class="bar-meta">
+                  <span id="rn-bar-txt">en espera</span>
+                  <span id="rn-bar-pct">0%</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="col col-out">
+          <section class="panel panel-res" id="rn-panel-res" hidden>
+            <div class="panel-head">
+              <h2>02 · AUTORIZACIONES</h2>
+              <span class="count" id="rn-res-count"></span>
+            </div>
+            <div class="panel-body panel-body-scroll">
+              <div id="rn-resultados" class="res"></div>
+            </div>
+          </section>
+
+          <section class="panel panel-term">
+            <div class="panel-head">
+              <h2>03 · CONSOLA</h2>
+              <button class="lnk" id="rn-log-clear" type="button">limpiar</button>
+            </div>
+            <div class="panel-body panel-body-flush">
+              <div class="term" id="rn-term" role="log" aria-live="polite"></div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- ============================================================= -->
+      <!-- VISTA 3 · ALTA DE PERSONAL NUEVO                               -->
+      <!-- ============================================================= -->
+      <div class="vista" id="vista-nuevo" hidden>
+        <div class="col col-in">
+          <section class="panel panel-obj">
+            <div class="panel-head">
+              <h2>01 · DATOS DE LA PERSONA</h2>
+            </div>
+            <div class="panel-body panel-body-scroll">
+              <div class="form">
+                <label class="lbl" for="nv-dni">DNI</label>
+                <input class="inp" id="nv-dni" inputmode="numeric" autocomplete="off" placeholder="07481337" />
+                <div id="nv-existe" class="alert alert-warn" hidden></div>
+
+                <label class="lbl" for="nv-apellidos">Apellidos</label>
+                <input class="inp" id="nv-apellidos" autocomplete="off" />
+
+                <label class="lbl" for="nv-nombres">Nombres</label>
+                <input class="inp" id="nv-nombres" autocomplete="off" />
+
+                <div class="form-2">
+                  <div>
+                    <label class="lbl" for="nv-empresa">Empresa</label>
+                    <input class="inp" id="nv-empresa" value="AESA" autocomplete="off" />
+                  </div>
+                  <div>
+                    <label class="lbl" for="nv-guardia">Guardia</label>
+                    <input class="inp" id="nv-guardia" autocomplete="off" />
+                  </div>
+                </div>
+
+                <label class="lbl" for="nv-cargo">Cargo (planilla)</label>
+                <div class="inp-borrable">
+                  <input class="inp" id="nv-cargo" autocomplete="off" />
+                  <button type="button" class="borrador" data-borra="nv-cargo" title="Borrar cargo" aria-label="Borrar cargo">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>
+                  </button>
+                </div>
+
+                <label class="lbl" for="nv-area">Área (planilla)</label>
+                <div class="inp-borrable">
+                  <input class="inp" id="nv-area" autocomplete="off" />
+                  <button type="button" class="borrador" data-borra="nv-area" title="Borrar área" aria-label="Borrar área">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>
+                  </button>
+                </div>
+
+                <div class="form-2">
+                  <div>
+                    <label class="lbl" for="nv-emo">F. Ex. Médico</label>
+                    <input class="inp" id="nv-emo" type="date" />
+                  </div>
+                  <div>
+                    <label class="lbl" for="nv-emo-venc">F. Vencimiento EMO</label>
+                    <input class="inp" id="nv-emo-venc" type="date" />
+                  </div>
+                </div>
+
+                <div class="form-2">
+                  <div>
+                    <label class="lbl" for="nv-lentes">Uso de lentes</label>
+                    <select class="inp" id="nv-lentes">
+                      <option value="NO">NO</option>
+                      <option value="SI">SI</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="lbl" for="nv-restricciones">Restricciones EMO</label>
+                    <input class="inp" id="nv-restricciones" autocomplete="off" placeholder="ninguna" />
+                  </div>
+                </div>
+
+                <label class="lbl" for="nv-comentario">Comentario</label>
+                <input class="inp" id="nv-comentario" autocomplete="off" />
+
+                <label class="lbl" for="nv-foto">Foto de la persona <span class="req" title="Obligatoria">*</span></label>
+                <input class="inp" id="nv-foto" type="file" accept="image/*" required />
+              </div>
+            </div>
+          </section>
+
+          <section class="panel panel-go">
+            <div class="panel-body">
+              <button class="btn btn-go" id="nv-run" type="button">
+                <span class="go-txt">DAR DE ALTA Y RENOVAR</span>
+                <span class="go-arrow">▸</span>
+              </button>
+              <div class="bar-wrap" id="nv-bar-wrap" hidden>
+                <div class="bar"><div class="bar-fill" id="nv-bar-fill"></div></div>
+                <div class="bar-meta">
+                  <span id="nv-bar-txt">en espera</span>
+                  <span id="nv-bar-pct">0%</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="col col-out">
+          <section class="panel panel-res">
+            <div class="panel-head">
+              <h2>02 · MATRIZ POR PUESTO</h2>
+              <span class="count" id="nv-matriz-count">—</span>
+            </div>
+            <div class="panel-body panel-body-scroll">
+              <p class="nota" id="nv-matriz-nota">
+                Escribe el cargo y el área (las opciones se filtran mientras escribes): se cargan de la hoja
+                <code>MATRIZ_PUESTO</code> los riesgos que exige ese puesto, agrupados en A, C y sin tipo.
+                Puedes ajustarlos antes de dar de alta.
+              </p>
+              <div class="matriz-grupos" id="nv-matriz"></div>
+            </div>
+          </section>
+
+          <section class="panel panel-term">
+            <div class="panel-head">
+              <h2>03 · CONSOLA</h2>
+              <button class="lnk" id="nv-log-clear" type="button">limpiar</button>
+            </div>
+            <div class="panel-body panel-body-flush">
+              <div class="term" id="nv-term" role="log" aria-live="polite"></div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- ============================================================= -->
+      <!-- VISTA 4 · ESTADO POR RRCC (vencimientos, para imprimir)        -->
+      <!-- ============================================================= -->
+      <div class="vista" id="vista-estado" hidden>
+        <div class="col col-in">
+          <section class="panel panel-obj">
+            <div class="panel-head">
+              <h2>01 · FILTROS</h2>
+              <span class="count" id="es-count">0 personas</span>
+            </div>
+            <div class="panel-body panel-body-col">
+              <label class="lbl" for="es-buscar">Buscar (nombre, DNI, área, cargo)</label>
+              <input
+                class="inp"
+                id="es-buscar"
+                type="search"
+                autocomplete="off"
+                placeholder="ej. LOPEZ, 71481337, MINA"
+              />
+
+              <label class="lbl" for="es-riesgo">Riesgo crítico</label>
+              <select class="inp" id="es-riesgo"></select>
+
+              <label class="lbl" for="es-estado">Estado</label>
+              <select class="inp" id="es-estado">
+                <option value="">TODOS LOS ESTADOS</option>
+                <option value="VENCIDO">VENCIDO</option>
+                <option value="ACTUALIZAR">ACTUALIZAR</option>
+                <option value="VIGENTE">VIGENTE</option>
+                <option value="NO APLICA">NO APLICA</option>
+              </select>
+
+              <label class="lbl">Orden</label>
+              <button class="btn btn-ghost" id="es-orden" type="button" aria-pressed="false"></button>
+
+              <div class="avisos">
+                <div class="alert alert-info">
+                  Trae a todo el personal de la hoja y arma, para cada RRCC, la lista de personas ordenada de
+                  vencido a por vencer (o al revés), lista para imprimir.
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel panel-go">
+            <div class="panel-body">
+              <button class="btn btn-go" id="es-cargar" type="button">
+                <span class="go-txt">CARGAR PERSONAL</span>
+                <span class="go-arrow">▸</span>
+              </button>
+              <button class="btn btn-ghost" id="es-imprimir" type="button" disabled>IMPRIMIR</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="col col-out">
+          <section class="panel panel-res">
+            <div class="panel-head">
+              <h2>02 · ESTADO POR RRCC</h2>
+              <span class="count" id="es-res-count"></span>
+            </div>
+            <div class="panel-body panel-body-scroll">
+              <div id="es-resultados" class="estado-rrcc"></div>
+            </div>
+          </section>
+
+          <section class="panel panel-term">
+            <div class="panel-head">
+              <h2>03 · CONSOLA</h2>
+              <button class="lnk" id="es-log-clear" type="button">limpiar</button>
+            </div>
+            <div class="panel-body panel-body-flush">
+              <div class="term" id="es-term" role="log" aria-live="polite"></div>
+            </div>
+          </section>
+        </div>
       </div>
     </main>
 
-    <!-- notificacion de fin de descarga -->
+    <!-- previsualización del fotocheck -->
+    <div class="modal" id="fc-modal" hidden>
+      <div class="modal-caja">
+        <div class="modal-head">
+          <b id="fc-titulo">Fotocheck</b>
+          <span class="fc-vivo" title="Se redibuja con cada cambio en las tarjetas">EN VIVO</span>
+          <button class="modal-x" id="fc-cerrar" type="button" aria-label="Cerrar">×</button>
+        </div>
+        <div class="modal-body"><canvas id="fc-canvas"></canvas></div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost btn-sm" id="fc-png" type="button">DESCARGAR PNG</button>
+          <button class="btn btn-go btn-sm" id="fc-docx" type="button">DESCARGAR WORD</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- notificacion de fin -->
     <div class="toast" id="toast" hidden role="status" aria-live="assertive">
       <div class="toast-bar"></div>
       <div class="toast-in">

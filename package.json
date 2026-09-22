@@ -1,14 +1,16 @@
 {
-  "name": "nexa-cert-extractor",
+  "name": "aesa-rrcc",
   "private": true,
-  "version": "1.0.0",
+  "version": "3.0.0",
   "type": "module",
-  "description": "Extractor de certificados por DNI - JOMISER + EIN (WebNexa)",
+  "description": "Certificados y Autorizacion de Riesgos Criticos - AESA / Cerro Lindo",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "vercel-dev": "vercel dev"
+    "vercel-dev": "vercel dev",
+    "test": "node --test tests/*.test.js",
+    "migrar": "node scripts/migrar-excel.js"
   },
   "dependencies": {
     "jszip": "^3.10.1"

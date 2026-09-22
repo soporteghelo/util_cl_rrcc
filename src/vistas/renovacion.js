@@ -1,0 +1,1213 @@
+/**
+ * Vista "RENOVACION": de una lista de DNI a la fila de `BD AESA` actualizada
+ * y, si se pide, la carpeta de la persona en Drive.
+ *
+ * La cola es secuencial por persona a proposito: EIN reutiliza una sola
+ * sesion y dos personas a la vez se pisarian el visor de Crystal Reports
+ * (es el mismo problema de "certificado de otra persona" que ya documenta
+ * el README). Dentro de una persona, cada operacion sigue siendo corta.
+ */
+
+import JSZip from "jszip";
+import { $, crearConsola, crearProgreso, notificar, pedirPermisoAviso } from "./comun.js";
+import { desdeTexto, normalizarLista } from "../lib/dni.js";
+import { extraerDocumentos } from "../lib/excel.js";
+import { sheets, drive, desdeBase64, descargar, blobABase64 } from "../lib/api.js";
+import { cargarContexto, renovarPersona, consultarPersona, generarSalidas, resumenAutorizaciones, fotoDeDni, guardarFilaVerificada } from "../lib/renovacion.js";
+import {
+  aFormatoCorto,
+  aIso,
+  sumarDias,
+  hoyIso,
+  estadoDe,
+  vencimientoDe,
+  renovarFila,
+  aplicarCapacitacionC,
+  aplicarEdicionesManuales,
+  admiteAplicarC,
+  leerFila,
+} from "../../shared/estados.js";
+import { colTipo, INDICE } from "../../shared/rrcc.js";
+import { autocompletar } from "./autocompletar.js";
+import { medirImagen } from "../lib/docx.js";
+import { dibujarFotocheck } from "../lib/fotocheck.js";
+import { abrirFotocheck, actualizarFotocheck, cerrarFotocheck, fotocheckAbiertoDe } from "./fotocheck-modal.js";
+
+export function normalizarCambiosPendientes(ficha, contextoExtra = {}) {
+  if (!ficha) return { cambios: 0, ediciones: {}, datosEdit: {} };
+
+  const baseRiesgoLocal = contextoExtra.baseRiesgo || (() => ({ tipo: "", venc: "" }));
+  const baseDatosLocal = contextoExtra.baseDatos || (() => ({}));
+  const normalizarTipo = (valor) => String(valor ?? "").trim().toUpperCase();
+  const normalizarFecha = (valor) => aIso(String(valor ?? "").trim() || "");
+  const normalizarTexto = (valor) => String(valor ?? "").trim();
+
+  const ediciones = { ...(ficha.ediciones || {}) };
+  for (const codigo of Object.keys(ediciones)) {
+    const edit = ediciones[codigo];
+    const base = baseRiesgoLocal(ficha, codigo) || { tipo: "", venc: "" };
+    const tipoIgual = edit.tipo === undefined || normalizarTipo(edit.tipo) === normalizarTipo(base.tipo);
+    const vencIgual = edit.venc === undefined || normalizarFecha(edit.venc) === normalizarFecha(base.venc);
+    if (tipoIgual && vencIgual) delete ediciones[codigo];
+  }
+
+  const datos = { ...(ficha.datosEdit || {}) };
+  const baseDatos = baseDatosLocal(ficha) || {};
+  for (const clave of Object.keys(datos)) {
+    const valor = datos[clave];
+    const base = baseDatos[clave];
+    const igual = clave === "emoVenc"
+      ? normalizarFecha(valor) === normalizarFecha(base)
+      : normalizarTexto(valor) === normalizarTexto(base);
+    if (igual) delete datos[clave];
+  }
+
+  ficha.ediciones = ediciones;
+  ficha.datosEdit = datos;
+  return { cambios: Object.keys(ediciones).length + Object.keys(datos).length, ediciones, datosEdit: datos };
+}
+
+export function montarRenovacion() {
+  const consola = crearConsola("rn-term", "rn-log-clear");
+  const barra = crearProgreso("rn");
+
+  const el = {
+    dnis: $("rn-dnis"),
+    count: $("rn-count"),
+    archivo: $("rn-archivo"),
+    limpiar: $("rn-limpiar"),
+    aviso: $("rn-aviso"),
+    run: $("rn-run"),
+    consultar: $("rn-consultar"),
+    stop: $("rn-stop"),
+    setup: $("rn-setup"),
+    salidas: $("rn-salidas"),
+    escribir: $("rn-escribir"),
+    panel: $("rn-panel-res"),
+    resultados: $("rn-resultados"),
+    resCount: $("rn-res-count"),
+    estadoBase: $("estado-base"),
+  };
+
+  let corriendo = false;
+  let abortador = null;
+  let contexto = null;
+  const fichas = new Map(); // dni -> { persona, foto, antiguo }
+  let temporizadorConsulta = null;
+  let ultimoAutoConsultado = "";
+
+  /* ---------------- entrada ---------------- */
+
+  const objetivos = () => normalizarLista(desdeTexto(el.dnis.value)).items;
+
+  function refrescar() {
+    el.count.textContent = `${objetivos().length} DNI`;
+  }
+  el.dnis.addEventListener("input", () => {
+    refrescar();
+    clearTimeout(temporizadorConsulta);
+    const lista = objetivos();
+    const dni = lista.length === 1 ? lista[0].dni : "";
+    if (!dni) ultimoAutoConsultado = "";
+    if (!dni || dni === ultimoAutoConsultado || corriendo) return;
+
+    // Al pegar o terminar de escribir un DNI se hace una consulta segura:
+    // compara, pero nunca guarda en Sheets ni crea salidas en Drive.
+    temporizadorConsulta = setTimeout(() => {
+      if (corriendo || objetivos().length !== 1 || objetivos()[0].dni !== dni) return;
+      ultimoAutoConsultado = dni;
+      ejecutar({ soloConsulta: true });
+    }, 550);
+  });
+
+  el.limpiar.addEventListener("click", () => {
+    el.dnis.value = "";
+    el.aviso.hidden = true;
+    ultimoAutoConsultado = "";
+    refrescar();
+    el.dnis.focus();
+  });
+
+  el.archivo.addEventListener("change", async (ev) => {
+    const archivo = ev.target.files?.[0];
+    if (!archivo) return;
+    try {
+      const { valores, detalle } = await extraerDocumentos(archivo);
+      if (!valores.length) throw new Error("no se encontró ninguna columna con documentos");
+      const union = normalizarLista([...desdeTexto(el.dnis.value), ...valores]);
+      el.dnis.value = union.items.map((i) => i.dni).join("\n");
+      refrescar();
+      el.aviso.hidden = false;
+      el.aviso.innerHTML = `<b>${archivo.name}</b> → ${valores.length} documento(s) de ${detalle}.`;
+      consola(`${valores.length} documento(s) desde ${detalle}`, "ok");
+    } catch (e) {
+      el.aviso.hidden = false;
+      el.aviso.innerHTML = `<b>No se pudo leer el archivo:</b> ${e.message}`;
+      consola(`error leyendo archivo: ${e.message}`, "err");
+    } finally {
+      ev.target.value = "";
+    }
+  });
+
+  /* ---------------- estado de la base ---------------- */
+
+  async function comprobarBase() {
+    try {
+      contexto = await cargarContexto();
+      const personas = Object.keys(contexto.config).length;
+      el.estadoBase.textContent = "BASE OK";
+      el.estadoBase.className = "tag ok";
+      el.estadoBase.title = `${contexto.cursos.length} alias de curso · ${personas} parámetros de CONFIG`;
+      return true;
+    } catch (e) {
+      el.estadoBase.textContent = "BASE ✕";
+      el.estadoBase.className = "tag mal";
+      el.estadoBase.title = e.message;
+      return false;
+    }
+  }
+
+  el.setup.addEventListener("click", async () => {
+    el.setup.disabled = true;
+    consola.cabecera("CONFIGURANDO LA BASE");
+    try {
+      const r = await sheets({ accion: "setup" });
+      if (r.creadas?.length) consola(`hojas creadas: ${r.creadas.join(", ")}`, "ok");
+      for (const linea of r.hecho || []) consola(linea, "ok");
+      if (!r.creadas?.length && !r.hecho?.length) consola("ya estaba todo listo", "info");
+      await comprobarBase();
+    } catch (e) {
+      consola(`no se pudo configurar: ${e.message}`, "err");
+      if (e.detalle?.faltan) consola(`faltan variables: ${e.detalle.faltan.join(", ")}`, "warn");
+    } finally {
+      el.setup.disabled = false;
+    }
+  });
+
+  /* ---------------- pintado ---------------- */
+
+  const CLASE_ESTADO = {
+    VIGENTE: "rc-vigente",
+    ACTUALIZAR: "rc-actualizar",
+    VENCIDO: "rc-vencido",
+    "NO APLICA": "rc-noaplica",
+  };
+
+  const escaparHtml = (valor) =>
+    String(valor ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
+  /* ---------------- edicion manual ---------------- */
+
+  const umbrales = () => {
+    const c = contexto?.config || {};
+    return { vencido: Number(c.UMBRAL_VENCIDO ?? 365), actualizar: Number(c.UMBRAL_ACTUALIZAR ?? 330) };
+  };
+
+  /** La fila de la hoja tal como esta ahora; se lee una vez por cada version de `valores`. */
+  function filaDeHoja(ficha) {
+    if (ficha.hojaLeida?.origen !== ficha.valores) ficha.hojaLeida = { origen: ficha.valores, fila: leerFila(ficha.valores) };
+    return ficha.hojaLeida.fila;
+  }
+
+  /** Tipo, vigencia y capacitacion con los que arranca un riesgo, antes de
+      cualquier edicion. Salen de la hoja y de nada mas: un certificado no
+      rellena lo que se dejo vacio a proposito. */
+  function baseRiesgo(ficha, codigo) {
+    const h = filaDeHoja(ficha).riesgos.find((x) => x.codigo === codigo);
+    return { tipo: h?.tipo || "", venc: h?.venc || "", cap: h?.cap || "" };
+  }
+
+  /** Lo que muestra un riesgo con una edicion dada (o sin ella): tipo, vigencia
+      y el estado que resulta de esa vigencia. */
+  function visibleCon(ficha, codigo, edit = {}) {
+    const base = baseRiesgo(ficha, codigo);
+    const u = umbrales();
+    const venc = edit.venc !== undefined ? edit.venc : base.venc;
+    let cap = base.cap;
+    if (edit.venc !== undefined) cap = edit.venc ? sumarDias(edit.venc, -u.vencido) : "";
+    else if (!cap && base.venc) cap = sumarDias(base.venc, -u.vencido);
+    return {
+      edit,
+      tipo: edit.tipo !== undefined ? edit.tipo : base.tipo,
+      venc,
+      estado: cap ? estadoDe(cap, hoyIso(), u) : "NO APLICA",
+    };
+  }
+
+  const visibleDe = (ficha, riesgo) => visibleCon(ficha, riesgo.codigo, ficha.ediciones?.[riesgo.codigo]);
+
+  /** La persona tal como la muestran las tarjetas (tipo y vigencia de cada
+      riesgo, editados o no). Es la que se imprime en el fotocheck y la que
+      manda en la cabecera: la hoja mas lo editado, sin pasar por los certificados. */
+  /** Vencimiento del EMO y area con los que arranca la ficha, segun la hoja. Si
+      la hoja no trae el vencimiento se toma el examen + 365 dias, como el fotocheck. */
+  function datosBase(ficha) {
+    const h = filaDeHoja(ficha);
+    return { emoVenc: h.vencimientoEmo || (h.examenMedico ? sumarDias(h.examenMedico, 365) : ""), area: h.area };
+  }
+
+  /** Lo que muestran los campos de EMO y area: la hoja, o lo editado encima. */
+  const datosVisibles = (ficha) => ({ ...datosBase(ficha), ...(ficha.datosEdit || {}) });
+
+  function personaVisible(ficha) {
+    const visibles = {};
+    for (const r of filaDeHoja(ficha).riesgos) {
+      const { tipo, venc } = visibleDe(ficha, r);
+      visibles[r.codigo] = { tipo, venc };
+    }
+    const fila = aplicarEdicionesManuales(ficha.valores, visibles, { config: contexto?.config });
+    const d = datosVisibles(ficha);
+    fila[INDICE["F. Vencimiento"]] = d.emoVenc;
+    fila[INDICE["Area Planilla"]] = d.area;
+    return leerFila(fila);
+  }
+
+  const htmlEstadoFinal = (p) =>
+    `<b class="${p.estadoFinal === "VIGENTE" ? "st-ok" : "st-err"}">${p.estadoFinal || "—"}</b>` +
+    `${p.fechaMinima ? ` hasta ${aFormatoCorto(p.fechaMinima)}` : ""}`;
+
+  const claseTipo = (tipo) => `rc-tipo${tipo ? ` rc-${tipo.toLowerCase()}` : ""}`;
+
+  /* Las tarjetas se agrupan por tipo. Cualquier tipo que no sea A o C
+     (vacio incluido) cae en el ultimo grupo. */
+  const GRUPOS = [
+    { tipo: "A", clase: "a", titulo: "A · AUTORIZADOS" },
+    { tipo: "C", clase: "c", titulo: "C · CAPACITADOS" },
+    { tipo: "", clase: "sin", titulo: "SIN TIPO" },
+  ];
+  const grupoDe = (tipo) => (tipo === "A" || tipo === "C" ? tipo : "");
+
+  /* Texto fijo de la cabecera de la ficha. Cada elemento va seguido de " |"
+     salvo el ultimo, y no se parte en dos lineas por dentro. */
+  const RRCC_CABECERA = [
+    "TRABAJOS EN ALTURA",
+    "CARGAS SUSPENDIDAS",
+    "BLOQUEO Y AISLAMIENTO DE ENERGÍA",
+    "ESPACIOS CONFINADOS",
+    "SISTEMAS PRESURIZADOS",
+    "HERRAMIENTAS MANUALES",
+    "VEHÍCULOS Y EQUIPOS MÓVILES",
+    "SUSTANCIAS QUÍMICAS PELIGROSAS",
+  ];
+
+  /* ---------------- fotocheck en vivo ---------------- */
+
+  const opcionesFotocheck = (ficha, clave) => ({ clave, foto: ficha.foto, antiguo: ficha.antiguo, config: contexto?.config || {} });
+
+  const textoBotonFotocheck = (abierto) => (abierto ? "OCULTAR FOTOCHECK" : "VER FOTOCHECK");
+  const ICONO_FOTOCHECK =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2.5"/><path d="M5.5 17c.6-2 2-3 3.5-3s2.9 1 3.5 3"/><path d="M15 9h4M15 12h4M15 15h3"/></svg>';
+
+  /** Los botones de la cabecera reflejan si el fotocheck de su persona esta abierto. */
+  function marcarBotonesFotocheck() {
+    for (const boton of el.resultados.querySelectorAll("[data-fotocheck]")) {
+      const abierto = fotocheckAbiertoDe(boton.dataset.fotocheck);
+      boton.setAttribute("aria-pressed", String(abierto));
+      boton.querySelector("[data-texto]").textContent = textoBotonFotocheck(abierto);
+    }
+  }
+  document.addEventListener("fotocheck:cerrado", marcarBotonesFotocheck);
+
+  let temporizadorFotocheck = null;
+  /** Redibuja el fotocheck abierto de esa persona con lo que muestran las
+      tarjetas en este momento. Se junta lo que llegue en un instante. */
+  function refrescarFotocheck(dni) {
+    if (!fotocheckAbiertoDe(dni)) return;
+    clearTimeout(temporizadorFotocheck);
+    temporizadorFotocheck = setTimeout(() => {
+      const ficha = fichas.get(dni);
+      if (!ficha?.persona || !fotocheckAbiertoDe(dni)) return;
+      actualizarFotocheck(personaVisible(ficha), opcionesFotocheck(ficha, dni)).catch(() => {});
+    }, 120);
+  }
+
+  function alternarFotocheck(dni) {
+    if (fotocheckAbiertoDe(dni)) {
+      cerrarFotocheck();
+      return;
+    }
+    const ficha = fichas.get(dni);
+    if (!ficha?.persona) return;
+    abrirFotocheck(personaVisible(ficha), opcionesFotocheck(ficha, dni)).catch(() => {});
+    marcarBotonesFotocheck();
+  }
+
+  /* ---------------- seleccion para aplicar C ---------------- */
+
+  const tipoEnHoja = (ficha, codigo) => String(ficha.valores?.[colTipo(codigo)] ?? "").trim().toUpperCase();
+
+  /** Una tarjeta se puede seleccionar si ni la hoja ni lo que se ve la marcan
+      como A, y si su riesgo no esta excluido de la carga de C. */
+  const elegibleParaC = (ficha, codigo, tipoVisible) =>
+    admiteAplicarC(codigo, tipoVisible) && admiteAplicarC(codigo, tipoEnHoja(ficha, codigo));
+
+  /** Deja la pantalla de acuerdo con la seleccion: casillas, resaltado, casilla
+      de cada grupo y el boton, que solo se habilita con algo seleccionado. */
+  function actualizarSeleccion(card, ficha) {
+    const seleccion = ficha.seleccion || (ficha.seleccion = new Set());
+    for (const celda of card.querySelectorAll(".rc")) {
+      const codigo = celda.dataset.codigo;
+      const elegible = elegibleParaC(ficha, codigo, celda.querySelector("[data-tipo]").value);
+      if (!elegible) seleccion.delete(codigo);
+      const marca = celda.querySelector(".rc-sel");
+      marca.hidden = !elegible;
+      marca.querySelector("input").checked = seleccion.has(codigo);
+      celda.classList.toggle("rc-sel-on", seleccion.has(codigo));
+    }
+    for (const seccion of card.querySelectorAll(".rrcc-grupo")) {
+      const todas = seccion.querySelector(".rrcc-grupo-todas");
+      if (!todas) continue;
+      const elegibles = [...seccion.querySelectorAll(".rc-sel:not([hidden]) input")];
+      const marcadas = elegibles.filter((c) => c.checked).length;
+      todas.hidden = elegibles.length === 0;
+      const caja = todas.querySelector("input");
+      caja.checked = elegibles.length > 0 && marcadas === elegibles.length;
+      caja.indeterminate = marcadas > 0 && marcadas < elegibles.length;
+    }
+    const boton = card.querySelector("[data-aplicar-c]");
+    boton.disabled = seleccion.size === 0;
+    boton.textContent = seleccion.size ? `APLICAR C (${seleccion.size})` : "APLICAR C";
+    boton.title = seleccion.size
+      ? `Aplica C con la fecha indicada a las ${seleccion.size} tarjeta(s) seleccionada(s)`
+      : "Selecciona al menos una tarjeta con su casilla. Las A y los riesgos excluidos no se pueden seleccionar";
+  }
+
+  /** Lleva la tarjeta a la seccion de su tipo, en el orden del catalogo, y
+      actualiza los contadores. Conserva el foco para poder seguir con el teclado. */
+  function moverAGrupo(card, celda, tipo) {
+    const destino = card.querySelector(`.rrcc-grupo[data-grupo="${grupoDe(tipo)}"]`);
+    const cambiaDeGrupo = destino !== celda.closest(".rrcc-grupo");
+    if (cambiaDeGrupo) {
+      const activo = document.activeElement;
+      const rejilla = destino.querySelector(".rrcc");
+      const orden = Number(celda.dataset.orden);
+      const siguiente = [...rejilla.children].find((c) => Number(c.dataset.orden) > orden);
+      rejilla.insertBefore(celda, siguiente || null);
+      if (activo && celda.contains(activo)) activo.focus();
+    }
+    for (const seccion of card.querySelectorAll(".rrcc-grupo")) {
+      const n = seccion.querySelectorAll(".rc").length;
+      seccion.hidden = n === 0;
+      seccion.querySelector("[data-grupo-n]").textContent = n;
+    }
+    if (cambiaDeGrupo) celda.scrollIntoView({ block: "nearest" });
+  }
+
+  /** Anota (o retira) una edicion y refresca solo esa celda: repintar la
+      ficha entera le quitaria el foco al campo de fecha mientras se escribe. */
+  function diferenciaFechaEditableConCertificado(ficha, codigo, venc = undefined) {
+    const riesgo = filaDeHoja(ficha).riesgos.find((x) => x.codigo === codigo);
+    const cert = (ficha?.detalle || []).find((d) => d.codigo === codigo)?.certificado;
+    if (!riesgo || !cert || !cert.fecha) return false;
+    const valorEditable = venc !== undefined ? venc : visibleDe(ficha, riesgo).venc;
+    const vencCert = vencimientoDe(codigo, cert.fecha, cert, umbrales().vencido) || "";
+    return Boolean(valorEditable && vencCert) && String(valorEditable).trim() !== String(vencCert).trim();
+  }
+
+  function editar(dni, card, codigo, cambio) {
+    const ficha = fichas.get(dni);
+    const base = baseRiesgo(ficha, codigo);
+    const actual = { ...(ficha.ediciones?.[codigo] || {}), ...cambio };
+    if (actual.tipo === base.tipo) delete actual.tipo;
+    if (actual.venc === base.venc) delete actual.venc;
+
+    ficha.ediciones = { ...ficha.ediciones };
+    if (Object.keys(actual).length) ficha.ediciones[codigo] = actual;
+    else delete ficha.ediciones[codigo];
+
+    const celda = card.querySelector(`.rc[data-codigo="${codigo}"]`);
+    const { tipo, estado } = visibleCon(ficha, codigo, actual);
+    for (const clase of Object.values(CLASE_ESTADO)) celda.classList.remove(clase);
+    celda.classList.add(CLASE_ESTADO[estado] || "rc-noaplica");
+    celda.classList.toggle("rc-editado", Object.keys(actual).length > 0);
+    celda.classList.toggle("rc-fecha-diferente", diferenciaFechaEditableConCertificado(ficha, codigo, actual.venc ?? visibleCon(ficha, codigo, actual).venc));
+    celda.querySelector("[data-estado]").textContent = estado.toLowerCase();
+    celda.querySelector("[data-tipo]").className = claseTipo(tipo);
+    moverAGrupo(card, celda, tipo);
+    actualizarSeleccion(card, ficha);
+    pintarBarraEdicion(card, ficha);
+    card.querySelector("[data-estado-final]").innerHTML = htmlEstadoFinal(personaVisible(ficha));
+    refrescarFotocheck(dni);
+  }
+
+  const cambiosPendientes = (ficha) => {
+    const n = normalizarCambiosPendientes(ficha, { baseRiesgo, baseDatos: datosBase });
+    return n.cambios;
+  };
+
+  function pintarBarraEdicion(card, ficha) {
+    const n = cambiosPendientes(ficha);
+    card.querySelector("[data-edicion]").hidden = n === 0;
+    card.querySelector("[data-edicion-n]").textContent = `${n} cambio(s) sin guardar`;
+  }
+
+  async function sincronizarFotocheckEnDrive(dni) {
+    const ficha = fichas.get(dni);
+    const folderId = ficha?.salida?.carpetaId || ficha?.carpetaId;
+    if (!folderId || !ficha?.persona) return false;
+
+    try {
+      const persona = personaVisible(ficha);
+      const foto = ficha.foto || (await fotoDeDni(persona.dni).catch(() => null));
+      const png = await dibujarFotocheck(persona, { foto, escala: 3 });
+      const nombre = `FOTOCHECK_${persona.nombreCompleto || persona.dni}.png`;
+      const meta = {
+        accion: "subir",
+        carpetaId: folderId,
+        nombre,
+        mime: "image/png",
+        datos: await blobABase64(await new Promise((resolver) => png.toBlob(resolver, "image/png"))),
+      };
+      const r = await drive(meta);
+      ficha.salida = { ...(ficha.salida || {}), carpetaId: folderId, fotocheck: r };
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function descargarCarpetaUsuario(dni) {
+    const ficha = fichas.get(dni);
+    const folderId = ficha?.salida?.carpetaId || ficha?.carpetaId;
+    if (!folderId) return;
+    await sincronizarFotocheckEnDrive(dni);
+
+    const lista = await drive({ accion: "listar", carpetaId: folderId });
+    const zip = new JSZip();
+    const root = zip.folder(`${(ficha?.persona?.nombreCompleto || dni).replace(/[\\/:*?"<>|]+/g, " ").trim() || dni}`) || zip;
+
+    for (const archivo of lista.archivos || []) {
+      const r = await drive({ accion: "bajar", id: archivo.id });
+      root.file(archivo.name, desdeBase64(r.datos));
+    }
+
+    const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(ficha?.persona?.nombreCompleto || dni).replace(/[\\/:*?"<>|]+/g, " ").trim() || dni}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+
+  /** Anota (o retira) una correccion del EMO o del area y refresca lo que depende de ella. */
+  function editarDatos(dni, card, cambio) {
+    const ficha = fichas.get(dni);
+    const base = datosBase(ficha);
+    const actual = { ...(ficha.datosEdit || {}), ...cambio };
+    for (const k of Object.keys(actual)) if (actual[k] === base[k]) delete actual[k];
+    ficha.datosEdit = actual;
+
+    card.querySelector(".campo-emo").classList.toggle("editado", actual.emoVenc !== undefined);
+    card.querySelector(".campo-area").classList.toggle("editado", actual.area !== undefined);
+    pintarBarraEdicion(card, ficha);
+    refrescarFotocheck(dni);
+  }
+
+  /**
+   * Lleva al estado lo que muestra un campo de fecha. `actual()` es el valor
+   * que ya tiene el estado y `aplicar(valor)` lo cambia.
+   *
+   * Un campo de fecha a medio escribir llega vacio (`badInput`): no es "borrar".
+   * Al teclear el anio pasa por 0002, 0020, 0202...: esos pasos no se toman
+   * (`provisional`); al confirmar se toma lo que haya. Chrome tampoco avisa
+   * (ni input ni change) cuando se termina de borrar con el teclado un campo que
+   * ya estaba incompleto: solo llegan keyup y blur.
+   */
+  function enlazarFecha(campo, actual, aplicar) {
+    const sincronizar = (provisional) => {
+      if (campo.validity.badInput) return;
+      if (provisional && campo.value && Number(campo.value.slice(0, 4)) < 2000) return;
+      if (campo.value === actual()) return; // ya esta al dia
+      aplicar(campo.value);
+    };
+    campo.addEventListener("input", () => sincronizar(true));
+    campo.addEventListener("change", () => sincronizar(false));
+    campo.addEventListener("keyup", () => sincronizar(true));
+    campo.addEventListener("blur", () => sincronizar(false));
+  }
+
+  /** Areas conocidas (para el desplegable del campo AREA): las que ya guardo la pestana NUEVO PERSONAL, o las pide una vez. */
+  let areasConocidas = [];
+  async function cargarAreas() {
+    try {
+      const guardado = JSON.parse(localStorage.getItem("rrcc.catalogo"));
+      if (Array.isArray(guardado?.areas)) areasConocidas = guardado.areas;
+    } catch {
+      /* sin almacenamiento solo se pierde el atajo */
+    }
+    if (areasConocidas.length) return;
+    try {
+      const catalogo = await sheets({ accion: "cargos" });
+      areasConocidas = catalogo.areas || [];
+      try {
+        localStorage.setItem("rrcc.catalogo", JSON.stringify(catalogo));
+      } catch {
+        /* idem */
+      }
+    } catch {
+      /* el campo sigue funcionando a mano */
+    }
+  }
+
+  /** Tabla de revision: la fila original de Sheets contra el certificado que
+      el motor eligio como mas reciente para cada autorizacion A. */
+  function tablaComparacion(personaHoja, detalle) {
+    const porCodigo = new Map(detalle.map((d) => [d.codigo, d]));
+    const filas = (personaHoja?.riesgos || [])
+      .filter((r) => r.tipo === "A")
+      .map((r) => {
+        const d = porCodigo.get(r.codigo);
+        const cert = d?.certificado;
+        const fechaCert = cert?.fecha || "";
+        let contraste = "sin certificado encontrado";
+        let clase = "cmp-falta";
+        if (fechaCert && r.cap) {
+          if (fechaCert > r.cap) {
+            contraste = "certificado mÃ¡s reciente";
+            clase = "cmp-nuevo";
+          } else if (fechaCert === r.cap) {
+            contraste = "misma fecha";
+            clase = "cmp-igual";
+          } else {
+            contraste = "certificado anterior";
+            clase = "cmp-anterior";
+          }
+        } else if (fechaCert) {
+          contraste = "sin fecha registrada en hoja";
+          clase = "cmp-nuevo";
+        }
+        return `<tr>` +
+          `<td><b>${escaparHtml(r.codigo)}</b> · ${escaparHtml(r.rotulo)}</td>` +
+          `<td>${aFormatoCorto(r.cap) || "â€”"}<small>vence ${aFormatoCorto(r.venc) || "â€”"}</small></td>` +
+          `<td>${fechaCert ? `${aFormatoCorto(fechaCert)}<small>${escaparHtml(cert.curso)} · ${escaparHtml(cert.origen)}</small>` : "â€”"}</td>` +
+          `<td class="${clase}">${contraste}</td>` +
+          `</tr>`;
+      })
+      .join("");
+    if (!filas) return "";
+    return `<section class="comparacion-a"><div class="comparacion-titulo">AUTORIZACIONES A · HOJA VS CERTIFICADO</div>` +
+      `<table><thead><tr><th>Riesgo</th><th>Hoja</th><th>Certificado encontrado</th><th>ComparaciÃ³n</th></tr></thead>` +
+      `<tbody>${filas}</tbody></table></section>`;
+  }
+
+  function pintarFicha(dni, datos) {
+    if (!datos.seleccion) datos.seleccion = new Set();
+    fichas.set(dni, datos);
+    el.panel.hidden = false;
+
+    let card = el.resultados.querySelector(`[data-dni="${dni}"]`);
+    if (!card) {
+      card = document.createElement("div");
+      card.className = "card card-ficha";
+      card.dataset.dni = dni;
+      el.resultados.appendChild(card);
+    }
+
+    const { detalle = [], alertas = [], salida = null, error = null, inventario = [] } = datos;
+    if (error) {
+      card.innerHTML =
+        `<div class="card-head"><span class="card-dni">${dni}</span>` +
+        `<span class="card-nom">${error}</span></div>`;
+      return;
+    }
+
+    const persona = personaVisible(datos);
+    const porCodigo = new Map(detalle.map((d) => [d.codigo, d]));
+    const res = datos.resumen || resumenAutorizaciones(detalle);
+    const pendientes = datos.ediciones || {};
+    const datosEdit = datos.datosEdit || {};
+
+    const tarjetas = persona.riesgos
+      .map((r, orden) => {
+        const d = porCodigo.get(r.codigo);
+        const cert = d?.certificado;
+        const nuevo = d && (d.cambio === "NUEVO" || d.cambio === "ACTUALIZADO");
+        const { edit, tipo, venc, estado } = visibleDe(datos, r);
+
+        // la vigencia del certificado, no la fecha en que se dio el curso
+        const venceCert = cert?.fecha ? vencimientoDe(r.codigo, cert.fecha, cert, umbrales().vencido) : "";
+        const fechaDiferente = Boolean(venc && venceCert) && String(venc).trim() !== String(venceCert).trim();
+        const contenidoCert =
+          `<small>CERTIFICADO · VIGENCIA</small><b>${aFormatoCorto(venceCert) || "sin fecha"}</b>` +
+          `<em>curso ${aFormatoCorto(cert?.fecha) || "sin fecha"} · ${escaparHtml(cert?.origen)}</em>`;
+        const certificado = !cert
+          ? `<span class="rc-cert falta">SIN CERTIFICADO</span>`
+          : cert.descargable
+            ? `<button type="button" class="rc-fecha cert-fecha" data-abrir-cert="${r.codigo}" title="Abrir el certificado (PDF) · ${escaparHtml(cert.curso)} · ${escaparHtml(cert.origen)}">${contenidoCert}</button>`
+            : `<span class="rc-fecha cert-fecha" title="${escaparHtml(cert.curso)} · ${escaparHtml(cert.origen)}">${contenidoCert}</span>`;
+
+        const opciones = ["", "A", "C"];
+        if (tipo && !opciones.includes(tipo)) opciones.push(tipo);
+        const selector =
+          `<select class="${claseTipo(tipo)}" data-tipo="${r.codigo}" aria-label="Tipo de ${escaparHtml(r.rotulo)}" title="A autorizado · C capacitado">` +
+          opciones.map((t) => `<option value="${escaparHtml(t)}"${t === tipo ? " selected" : ""}>${escaparHtml(t) || "—"}</option>`).join("") +
+          `</select>`;
+
+        return {
+          grupo: grupoDe(tipo),
+          html:
+            `<div class="rc ${CLASE_ESTADO[estado] || "rc-noaplica"}${nuevo ? " rc-nuevo" : ""}${!cert ? " rc-sin-cert" : ""}${Object.keys(edit).length ? " rc-editado" : ""}${fechaDiferente ? " rc-fecha-diferente" : ""}" data-codigo="${r.codigo}" data-orden="${orden}">` +
+            `<div class="rc-top">` +
+            `<label class="rc-sel" title="Seleccionar para aplicar C"${elegibleParaC(datos, r.codigo, tipo) ? "" : " hidden"}>` +
+            `<input type="checkbox" data-sel="${r.codigo}" aria-label="Seleccionar ${escaparHtml(r.rotulo)} para aplicar C"${datos.seleccion?.has(r.codigo) ? " checked" : ""} /></label>` +
+            `<b>${r.rotulo}</b>${selector}</div>` +
+            `<span class="rc-fecha rrcc-fecha"><small>RRCC EN HOJA</small>` +
+            `<input type="date" data-venc="${r.codigo}" value="${venc || ""}" aria-label="Vigencia de ${escaparHtml(r.rotulo)}" title="Vigencia en la hoja (editable)" />` +
+            `<em data-estado>${estado.toLowerCase()}</em></span>` +
+            `${certificado}</div>`,
+        };
+      });
+
+    // A y C van en sus propias secciones; lo que no tiene tipo queda al final
+    const celdas = GRUPOS.map((g) => {
+      const propias = tarjetas.filter((t) => t.grupo === g.tipo);
+      return (
+        `<section class="rrcc-grupo rrcc-grupo-${g.clase}" data-grupo="${g.tipo}"${propias.length ? "" : " hidden"}>` +
+        `<div class="rrcc-grupo-head"><b>${g.titulo}</b><span data-grupo-n>${propias.length}</span>` +
+        (g.tipo === "A"
+          ? ""
+          : `<label class="rrcc-grupo-todas" title="Seleccionar todas las tarjetas de este grupo"><input type="checkbox" data-sel-grupo="${g.tipo}" /> SELECCIONAR TODAS</label>`) +
+        `</div>` +
+        `<div class="rrcc">${propias.map((t) => t.html).join("")}</div></section>`
+      );
+    }).join("");
+
+    const avisos = alertas
+      .map((a) => `<div class="al ${a.nivel === "error" ? "err" : ""}">${a.codigo ? `<b>${a.codigo}</b> · ` : ""}${a.motivo}</div>`)
+      .join("");
+
+    const panelFuente = (origen, titulo, vacio = origen) => {
+      const items = inventario.filter((i) => i.origen === origen);
+      const lista = items.length
+        ? items.map((it, i) => {
+            const indice = inventario.indexOf(it);
+            const estado = it.descargable ? "ABRIR PDF" : "SIN CERTIFICADO";
+            return `<button class="cert-item${it.descargable ? "" : " disabled"}" data-cert="${indice}" ${it.descargable ? "" : "disabled"} title="${escaparHtml(it.archivo || it.curso || "")}">` +
+              `<b>${escaparHtml(it.curso || "Certificado")}</b><span>${[aFormatoCorto(it.fecha) || (origen === "INDUCCION" ? "" : "sin fecha"), estado].filter(Boolean).join(" · ")}</span></button>`;
+          }).join("")
+        : `<div class="cert-vacio">No se encontraron certificados de ${vacio}.</div>`;
+      return `<section class="cert-panel cert-${origen.toLowerCase()}"><div class="cert-head">${titulo}<span>${items.length}</span></div>${lista}</section>`;
+    };
+
+    const folderId = datos?.salida?.carpetaId || datos?.carpetaId || salida?.carpetaId;
+    const enlace = folderId
+      ? `<a class="btn btn-ghost btn-sm" href="https://drive.google.com/drive/folders/${folderId}" target="_blank" rel="noopener" data-carpeta-abrir="${dni}">ABRIR CARPETA</a>` +
+        `<button type="button" class="btn btn-ghost btn-sm" data-carpeta-zip="${dni}">DESCARGAR CARPETA</button>`
+      : "";
+
+    /* Lo que importa de un vistazo: de las "A" que la persona tiene, cuantas
+       siguen respaldadas por un certificado vigente en las tres fuentes. */
+    const trozos = [
+      `<b class="${res.vigentes.length === res.total ? "st-ok" : "st-err"}">` +
+        `${res.vigentes.length}/${res.total}</b> autorizaciones vigentes`,
+    ];
+    if (res.porVencer.length) trozos.push(`<b class="st-wait">${res.porVencer.length}</b> por vencer`);
+    if (res.vencidos.length) trozos.push(`<b class="st-err">${res.vencidos.length}</b> vencidas`);
+    if (res.sinCertificado.length) trozos.push(`<b class="st-err">${res.sinCertificado.length}</b> sin certificado`);
+    if (res.conCertificadoNuevo) trozos.push(`${res.conCertificadoNuevo} con certificado nuevo`);
+
+    // arriba, fija al desplazarse: identificacion, fotocheck, aplicar C y guardar
+    // cambios, para no perderlos de vista mientras se editan tarjetas de abajo
+    card.innerHTML =
+      `<div class="card-barra">` +
+      `<div class="card-id"><span class="card-dni">${persona.dni}</span>` +
+      `<span class="item-meta">${persona.codigo || ""}</span>` +
+      `<span class="card-n">${datos.consulta ? "consulta" : "renovado"}</span>` +
+      `<label class="campo-ficha campo-emo${datosEdit.emoVenc !== undefined ? " editado" : ""}" title="Vencimiento del examen médico (EMO). Se imprime en el fotocheck y se puede corregir aquí"><span>EMO VENCE</span>` +
+      `<input type="date" data-emo-venc value="${persona.vencimientoEmo || ""}" aria-label="Vencimiento del EMO" /></label>` +
+      `<label class="campo-ficha campo-area${datosEdit.area !== undefined ? " editado" : ""}" title="Área de la planilla. Se imprime en el fotocheck y se puede corregir aquí"><span>ÁREA</span>` +
+      `<input type="text" id="area-${dni}" data-area value="${escaparHtml(persona.area)}" placeholder="sin área" autocomplete="off" aria-label="Área" /></label>` +
+      `<button type="button" class="btn btn-fotocheck" data-fotocheck="${dni}" aria-pressed="${fotocheckAbiertoDe(dni)}" title="Muestra el fotocheck y lo mantiene al día con las fechas y los tipos que edites">${ICONO_FOTOCHECK}<span data-texto>${textoBotonFotocheck(fotocheckAbiertoDe(dni))}</span></button></div>` +
+      `<label class="aplicar-c"><span>FECHA C</span><input type="date" data-fecha-c title="Fecha de capacitación que se aplica como C a las tarjetas seleccionadas" /><button class="btn btn-warn btn-sm" data-aplicar-c disabled>APLICAR C</button></label>` +
+      `<div class="edicion-barra" data-edicion${cambiosPendientes(datos) ? "" : " hidden"}>` +
+      `<span data-edicion-n>${cambiosPendientes(datos)} cambio(s) sin guardar</span>` +
+      `<button class="btn btn-warn btn-sm" data-guardar-edicion>GUARDAR CAMBIOS</button>` +
+      `<button class="btn btn-ghost btn-sm" data-descartar-edicion>DESCARTAR</button></div>` +
+      `</div>` +
+      `<div class="card-head card-head-ren">` +
+      `<span class="card-nom">${persona.nombreCompleto} · ${persona.cargo || "sin cargo"} · <span data-estado-final>${htmlEstadoFinal(persona)}</span></span>` +
+      `<div class="card-c-lista">${RRCC_CABECERA.map((t, i, a) => `<span>${t}${i < a.length - 1 ? " |" : ""}</span>`).join(" ")}</div>` +
+      `<span class="card-res">${trozos.join(" · ")}</span>` +
+      `</div>` +
+      `<div class="ficha-cuerpo"><section class="rrcc-principal">${celdas}</section>` +
+      `<aside class="certificados-lateral">${panelFuente("EIN", "CERTIFICADOS EIN")}${panelFuente("INDUCCION", "CERTIFICADOS INDUCCION", "inducción")}</aside></div>` +
+      (avisos ? `<div class="card-alertas">${avisos}</div>` : "") +
+      (enlace ? `<div class="card-acciones">${enlace}</div>` : "");
+
+    card.querySelector("[data-fotocheck]")?.addEventListener("click", () => alternarFotocheck(dni));
+    card.querySelector("[data-carpeta-abrir]")?.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      const folderId = fichas.get(dni)?.salida?.carpetaId || fichas.get(dni)?.carpetaId;
+      if (!folderId) return;
+      if (await sincronizarFotocheckEnDrive(dni)) {
+        window.open(`https://drive.google.com/drive/folders/${folderId}`, "_blank", "noopener,noreferrer");
+      } else {
+        window.open(`https://drive.google.com/drive/folders/${folderId}`, "_blank", "noopener,noreferrer");
+      }
+    });
+    card.querySelector("[data-carpeta-zip]")?.addEventListener("click", () => descargarCarpetaUsuario(dni));
+
+    const campoEmo = card.querySelector("[data-emo-venc]");
+    enlazarFecha(campoEmo, () => datosVisibles(fichas.get(dni)).emoVenc, (valor) => editarDatos(dni, card, { emoVenc: valor }));
+    const campoArea = card.querySelector("[data-area]");
+    const sincronizarArea = () => {
+      const valor = campoArea.value.trim();
+      if (valor !== datosVisibles(fichas.get(dni)).area) editarDatos(dni, card, { area: valor });
+    };
+    for (const evento of ["input", "change", "blur"]) campoArea.addEventListener(evento, sincronizarArea);
+    autocompletar(campoArea, { obtener: () => areasConocidas, nombre: "áreas" });
+    card.querySelectorAll("[data-cert]").forEach((boton) => {
+      boton.addEventListener("click", () => abrirCertificado(fichas.get(dni)?.inventario?.[Number(boton.dataset.cert)]));
+    });
+    card.querySelectorAll("[data-abrir-cert]").forEach((boton) => {
+      boton.addEventListener("click", () => {
+        abrirCertificado(fichas.get(dni)?.detalle?.find((d) => d.codigo === boton.dataset.abrirCert)?.certificado);
+      });
+    });
+    card.querySelector("[data-aplicar-c]")?.addEventListener("click", () => aplicarC(dni, card));
+
+    card.querySelectorAll("input[data-sel]").forEach((caja) => {
+      caja.addEventListener("change", () => {
+        const f = fichas.get(dni);
+        if (caja.checked) f.seleccion.add(caja.dataset.sel);
+        else f.seleccion.delete(caja.dataset.sel);
+        actualizarSeleccion(card, f);
+      });
+    });
+    card.querySelectorAll("input[data-sel-grupo]").forEach((caja) => {
+      caja.addEventListener("change", () => {
+        const f = fichas.get(dni);
+        for (const c of caja.closest(".rrcc-grupo").querySelectorAll(".rc-sel:not([hidden]) input")) {
+          if (caja.checked) f.seleccion.add(c.dataset.sel);
+          else f.seleccion.delete(c.dataset.sel);
+        }
+        actualizarSeleccion(card, f);
+      });
+    });
+    actualizarSeleccion(card, datos);
+    refrescarFotocheck(dni);
+
+    card.querySelectorAll("select[data-tipo]").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const codigo = sel.dataset.tipo;
+        if (sel.value !== "") {
+          editar(dni, card, codigo, { tipo: sel.value });
+          return;
+        }
+        // sin A ni C no hay vigencia: el campo de fecha tambien queda en blanco
+        card.querySelector(`input[data-venc="${codigo}"]`).value = "";
+        editar(dni, card, codigo, { tipo: "", venc: "" });
+      });
+    });
+    card.querySelectorAll("input[data-venc]").forEach((campo) => {
+      const codigo = campo.dataset.venc;
+      enlazarFecha(
+        campo,
+        () => {
+          const ficha = fichas.get(dni);
+          return visibleDe(ficha, filaDeHoja(ficha).riesgos.find((x) => x.codigo === codigo)).venc;
+        },
+        (valor) => editar(dni, card, codigo, { venc: valor })
+      );
+    });
+    card.querySelector("[data-guardar-edicion]").addEventListener("click", () => guardarEdiciones(dni, card));
+    card.querySelector("[data-descartar-edicion]").addEventListener("click", () => {
+      fichas.get(dni).ediciones = {};
+      fichas.get(dni).datosEdit = {};
+      pintarFicha(dni, fichas.get(dni));
+    });
+  }
+
+  /**
+   * Mensaje de confirmacion de un guardado. Sale de lo que la hoja tiene AHORA
+   * (la fila releida despues de guardar), no de lo que se envio: si algo no
+   * quedo igual, se avisa en vez de dar el guardado por bueno.
+   */
+  function confirmarGuardado(guardado, codigos, titulo, columnas = []) {
+    const hoja = leerFila(guardado.valores);
+    const lineas = codigos.map((codigo) => {
+      const r = hoja.riesgos.find((x) => x.codigo === codigo);
+      return `${r.rotulo}: ${r.tipo || "sin tipo"}${r.venc ? ` · vigencia ${aFormatoCorto(r.venc)}` : " · sin vigencia"}`;
+    });
+    if (columnas.includes("F. Vencimiento")) lineas.push(`EMO vence ${aFormatoCorto(hoja.vencimientoEmo) || "sin fecha"}`);
+    if (columnas.includes("Area Planilla")) lineas.push(`Área: ${hoja.area || "vacía"}`);
+    const dif = guardado.diferencias.map(
+      (d) => `${d.codigo} ${d.campo}: se pidió ${aFormatoCorto(d.esperado) || d.esperado || "vacío"}, la hoja tiene ${aFormatoCorto(d.real) || d.real || "vacío"}`
+    );
+
+    consola(`${titulo} · fila ${guardado.fila} de la hoja`, guardado.confirmado ? "ok" : "warn");
+    for (const l of lineas) consola(`   ${l}`, "ok");
+    if (guardado.recuperado) consola("Google devolvió una respuesta dañada, pero al releer la hoja el cambio ya estaba guardado", "warn");
+    for (const c of guardado.formulaReemplazada) consola(`   la celda "${c}" tenía una fórmula en la hoja: quedó reemplazada por el valor escrito`, "warn");
+    for (const d of dif) consola(`   ✕ ${d}`, "err");
+
+    const resumen = lineas.slice(0, 3).join(" · ") + (lineas.length > 3 ? ` · +${lineas.length - 3} más` : "");
+    if (guardado.confirmado) {
+      notificar(
+        "Guardado y confirmado en la hoja",
+        `Fila ${guardado.fila} · ${resumen}${guardado.recuperado ? " (la respuesta de Google llegó dañada, pero la hoja ya lo tiene)" : ""}`,
+        "ok"
+      );
+    } else {
+      notificar("Guardado, pero la hoja no coincide", `Fila ${guardado.fila} · ${dif[0]}${dif.length > 1 ? ` (+${dif.length - 1} más)` : ""}`, "warn");
+    }
+  }
+
+  /** Escribe en la hoja lo corregido a mano y deja la ficha con la fila nueva. */
+  async function guardarEdiciones(dni, card) {
+    const ficha = fichas.get(dni);
+    const ediciones = ficha?.ediciones || {};
+    const datosEdit = ficha?.datosEdit || {};
+    if (!ficha?.fila || !Array.isArray(ficha.valores) || !cambiosPendientes(ficha)) return;
+
+    // el navegador acepta anios como 0002 mientras se teclea; no se guardan
+    const mala = Object.entries(ediciones).find(([, e]) => e.venc && !/^20\d\d-/.test(e.venc));
+    if (mala) {
+      notificar("Vigencia no válida", `${mala[0]}: revisa el año de la fecha`, "warn");
+      return;
+    }
+    if (datosEdit.emoVenc && !/^20\d\d-/.test(datosEdit.emoVenc)) {
+      notificar("Vigencia no válida", "EMO: revisa el año de la fecha", "warn");
+      return;
+    }
+
+    const botones = card.querySelectorAll("[data-guardar-edicion], [data-descartar-edicion]");
+    botones.forEach((b) => (b.disabled = true));
+    try {
+      const valores = aplicarEdicionesManuales(ficha.valores, ediciones, { config: contexto?.config });
+      const codigos = Object.keys(ediciones);
+      // vencimiento del EMO y area: columnas de A:O que se envian aparte
+      const datos = {};
+      if (datosEdit.emoVenc !== undefined) datos["F. Vencimiento"] = datosEdit.emoVenc;
+      if (datosEdit.area !== undefined) datos["Area Planilla"] = datosEdit.area;
+      for (const [columna, valor] of Object.entries(datos)) valores[INDICE[columna]] = valor;
+      const guardado = await guardarFilaVerificada({ fila: ficha.fila, valores, dni: ficha.persona.dni, codigos, datos });
+
+      // se vuelve a calcular contra los certificados, sin red, para que los
+      // estados y el resumen salgan con la fila tal como quedo en la hoja
+      const r = renovarFila({
+        fila: guardado.valores,
+        items: ficha.inventario,
+        diccionario: contexto.diccionario,
+        config: contexto.config,
+      });
+      ficha.valores = guardado.valores;
+      ficha.persona = leerFila(guardado.valores);
+      ficha.detalle = r.detalle;
+      ficha.alertas = r.alertas;
+      ficha.resumen = resumenAutorizaciones(r.detalle);
+      ficha.ediciones = {};
+      ficha.datosEdit = {};
+      ficha.ediciones = {};
+      ficha.datosEdit = {};
+      normalizarCambiosPendientes(ficha);
+      pintarFicha(dni, ficha);
+      const partes = [];
+      if (codigos.length) partes.push(`${codigos.length} riesgo(s)`);
+      if (datos["F. Vencimiento"] !== undefined) partes.push("EMO");
+      if (datos["Area Planilla"] !== undefined) partes.push("área");
+      confirmarGuardado(guardado, codigos, `${partes.join(" + ")} corregido(s) a mano`, Object.keys(datos));
+    } catch (e) {
+      botones.forEach((b) => (b.disabled = false));
+      notificar("No se pudo guardar", e.message, "warn");
+      consola(`no se pudo guardar la edición: ${e.message}`, "err");
+    }
+  }
+
+  async function aplicarC(dni, card) {
+    const ficha = fichas.get(dni);
+    const fecha = card.querySelector("[data-fecha-c]")?.value || "";
+    const boton = card.querySelector("[data-aplicar-c]");
+    if (!ficha?.fila || !Array.isArray(ficha.valores)) return;
+
+    // solo las tarjetas seleccionadas; sin seleccion no se hace nada
+    const elegidas = ficha.persona.riesgos
+      .filter((r) => ficha.seleccion?.has(r.codigo) && elegibleParaC(ficha, r.codigo, visibleDe(ficha, r).tipo))
+      .map((r) => r.codigo);
+    if (!elegidas.length) {
+      notificar("Selecciona tarjetas", "APLICAR C solo actúa sobre las tarjetas seleccionadas", "warn");
+      return;
+    }
+
+    boton.disabled = true;
+    try {
+      const valores = aplicarCapacitacionC(ficha.valores, fecha, { solo: elegidas });
+      const guardado = await guardarFilaVerificada({ fila: ficha.fila, valores, dni: ficha.persona.dni, codigos: elegidas });
+      ficha.valores = guardado.valores;
+      ficha.persona = leerFila(guardado.valores);
+      ficha.seleccion = new Set();
+      fichas.set(dni, ficha);
+      pintarFicha(dni, ficha);
+      confirmarGuardado(guardado, elegidas, `C aplicada a ${elegidas.length} tarjeta(s)${fecha ? ` con fecha ${aFormatoCorto(fecha)}` : " (campos limpiados)"}`);
+    } catch (e) {
+      actualizarSeleccion(card, ficha);
+      notificar("No se pudo aplicar C", e.message, "warn");
+      consola(`no se pudo aplicar C: ${e.message}`, "err");
+    }
+  }
+
+  /**
+   * El certificado se abre en una capa a pantalla completa por encima de todo
+   * y se cierra con VOLVER o Escape. La ficha de atras no se toca, asi las
+   * ediciones sin guardar siguen ahi al regresar.
+   */
+  async function abrirCertificado(cert) {
+    if (!cert?.descargable) return;
+    const previo = document.activeElement;
+    const visor = document.createElement("div");
+    visor.className = "visor-modal";
+    visor.setAttribute("role", "dialog");
+    visor.setAttribute("aria-modal", "true");
+    visor.setAttribute("aria-label", "Certificado");
+    visor.innerHTML =
+      `<div class="visor-head"><button class="btn btn-ghost btn-sm" data-volver>← VOLVER</button>` +
+      `<span>${escaparHtml(cert.curso)} · ${escaparHtml(cert.origen)}</span></div>` +
+      `<div class="visor-carga">Cargando certificado...</div>`;
+    document.body.appendChild(visor);
+
+    let url = "";
+    let cerrado = false;
+    const cerrar = () => {
+      cerrado = true;
+      if (url) URL.revokeObjectURL(url);
+      document.removeEventListener("keydown", alTeclear);
+      visor.remove();
+      previo?.focus?.();
+    };
+    const alTeclear = (ev) => {
+      if (ev.key === "Escape") cerrar();
+    };
+    document.addEventListener("keydown", alTeclear);
+    const volver = visor.querySelector("[data-volver]");
+    volver.addEventListener("click", cerrar);
+    volver.focus();
+
+    try {
+      const r = await descargar({ id: cert.id, origen: cert.origen, ...(cert.datosDescarga || {}) });
+      if (cerrado) return;
+      if (r.sinCertificado) throw new Error(r.motivo || "sin certificado emitido");
+      url = URL.createObjectURL(new Blob([r.pdf], { type: "application/pdf" }));
+      visor.querySelector(".visor-carga").outerHTML = `<iframe class="visor-pdf" title="Certificado" src="${url}"></iframe>`;
+    } catch (e) {
+      if (cerrado) return;
+      visor.querySelector(".visor-carga").outerHTML = `<div class="visor-error">No se pudo abrir el certificado: ${escaparHtml(e.message)}</div>`;
+    }
+  }
+
+  /* ---------------- corrida ---------------- */
+
+  /**
+   * `soloConsulta` recorre las mismas fuentes pero no escribe en la hoja ni
+   * crea nada en Drive: sirve para mirar a una persona y ver de un vistazo
+   * si sus "A" siguen respaldadas por un certificado vigente.
+   */
+  async function ejecutar({ soloConsulta = false } = {}) {
+    const lista = objetivos();
+    if (!lista.length) {
+      consola(soloConsulta ? "escribe al menos un documento" : "no hay documentos que renovar", "warn");
+      el.dnis.focus();
+      return;
+    }
+
+    corriendo = true;
+    abortador = new AbortController();
+    const senal = abortador.signal;
+
+    el.run.disabled = true;
+    el.consultar.disabled = true;
+    el.stop.hidden = false;
+    barra.mostrar(true);
+    consola.limpiar();
+    el.resultados.innerHTML = "";
+    fichas.clear();
+    cerrarFotocheck();
+
+    consola.cabecera(`${soloConsulta ? "CONSULTA" : "RENOVACION"} · ${lista.length} persona(s)`);
+    if (soloConsulta) consola("modo consulta: no se escribe en la hoja ni en Drive", "info");
+
+    let hechas = 0;
+    let conSalida = 0;
+    let fallos = 0;
+    const nuevos = [];
+
+    try {
+      if (!contexto) {
+        consola("cargando CONFIG y diccionario de cursos...");
+        contexto = await cargarContexto(senal);
+        consola(`${contexto.cursos.length} alias de curso, ${contexto.matriz.length} fila(s) de matriz`, "ok");
+      }
+
+      for (const [i, obj] of lista.entries()) {
+        if (senal.aborted) break;
+        barra.set(hechas, lista.length, `${obj.dni} · leyendo`);
+        consola.cabecera(`[${i + 1}/${lista.length}] DNI ${obj.dni}`);
+
+        try {
+          const r = soloConsulta
+            ? await consultarPersona(obj.dni, contexto, { log: consola, senal })
+            : await renovarPersona(obj.dni, contexto, {
+                log: consola,
+                senal,
+                escribir: el.escribir.checked,
+              });
+
+          if (r.estado === "nuevo") {
+            nuevos.push(obj.dni);
+            pintarFicha(obj.dni, { error: "no está en la base — usa la pestaña NUEVO PERSONAL" });
+            hechas++;
+            continue;
+          }
+
+          const ficha = {
+            persona: r.despues,
+            detalle: r.detalle,
+            alertas: r.alertas,
+            resumen: r.resumen,
+            inventario: r.inventario?.items || [],
+            fila: r.fila,
+            valores: r.enHoja,
+            ediciones: {},
+            datosEdit: {},
+            seleccion: new Set(),
+            consulta: soloConsulta,
+          };
+          pintarFicha(obj.dni, ficha);
+          if (r.resumen) {
+            consola(
+              `${r.resumen.vigentes.length}/${r.resumen.total} autorizaciones vigentes` +
+                (r.resumen.vencidos.length ? ` · ${r.resumen.vencidos.length} vencida(s)` : "") +
+                (r.resumen.porVencer.length ? ` · ${r.resumen.porVencer.length} por vencer` : ""),
+              r.resumen.vigentes.length === r.resumen.total ? "ok" : "warn"
+            );
+          }
+
+          if (!soloConsulta && el.salidas.checked) {
+            barra.set(hechas, lista.length, `${obj.dni} · generando salidas`);
+            ficha.salida = await generarSalidas(r, contexto, {
+              log: consola,
+              senal,
+              avance: (hecho, total, que) => barra.set(hechas, lista.length, `${obj.dni} · ${que}`),
+            });
+            conSalida++;
+          }
+
+          // el modal necesita la foto y el fotocheck antiguo; si ya se
+          // generaron las salidas vienen de ahi y no se vuelven a bajar
+          if (ficha.salida) {
+            ficha.foto = ficha.salida.foto;
+            ficha.antiguo = ficha.salida.antiguo;
+          } else {
+            Object.assign(ficha, await materialFotocheck(r.despues, senal));
+          }
+          pintarFicha(obj.dni, ficha);
+        } catch (e) {
+          if (senal.aborted) break;
+          fallos++;
+          consola(`  ${e.message}`, "err");
+          pintarFicha(obj.dni, { error: e.message });
+        }
+
+        hechas++;
+        barra.set(hechas, lista.length, `${hechas}/${lista.length}`);
+        el.resCount.textContent =
+          `${hechas}/${lista.length}` + (soloConsulta ? " consultada(s)" : ` · ${conSalida} con salidas`);
+      }
+
+      /* ---------------- cierre ---------------- */
+      barra.set(1, 1, senal.aborted ? "abortado" : "completado");
+
+      if (senal.aborted) {
+        consola.cabecera(`ABORTADO · ${hechas} persona(s) procesada(s)`);
+        notificar("Renovación abortada", `${hechas} persona(s) alcanzaron a procesarse.`, "warn");
+        return;
+      }
+
+      consola.cabecera(`${soloConsulta ? "CONSULTA COMPLETA" : "COMPLETADO"} · ${hechas} persona(s)`);
+      if (nuevos.length) consola(`${nuevos.length} no estaban en la base: ${nuevos.join(", ")}`, "warn");
+
+      const detalleAviso =
+        `${hechas - fallos - nuevos.length} ${soloConsulta ? "consultada(s)" : "renovada(s)"}` +
+        (conSalida ? `, ${conSalida} con carpeta en Drive` : "") +
+        (nuevos.length ? `, ${nuevos.length} sin ficha` : "") +
+        (fallos ? `, ${fallos} con error` : "");
+      notificar(
+        soloConsulta ? "Consulta completa" : "Renovación completa",
+        detalleAviso,
+        fallos || nuevos.length ? "warn" : "ok"
+      );
+    } catch (e) {
+      consola(`la corrida se detuvo: ${e.message}`, "err");
+      notificar("Renovación interrumpida", e.message, "warn");
+    } finally {
+      corriendo = false;
+      el.run.disabled = false;
+      el.consultar.disabled = false;
+      el.stop.hidden = true;
+    }
+  }
+
+  /**
+   * Foto de la persona y del fotocheck antiguo, para el modal. Si falta
+   * alguna no es un error: el fotocheck se dibuja igual y el Word lleva
+   * solo la imagen nueva.
+   */
+  async function materialFotocheck(persona, senal) {
+    const salida = { foto: null, antiguo: null };
+    try {
+      salida.foto = await fotoDeDni(persona.dni, senal);
+    } catch {
+      /* sin foto en la carpeta FOTOS */
+    }
+    if (persona.fotocheckAntiguoDriveId) {
+      try {
+        const r = await drive({ accion: "bajar", id: persona.fotocheckAntiguoDriveId }, senal);
+        const bytes = desdeBase64(r.datos);
+        const medida = await medirImagen(new Blob([bytes], { type: r.mime }));
+        salida.antiguo = { datos: bytes, mime: r.mime, ancho: medida.ancho, alto: medida.alto };
+      } catch {
+        /* sin fotocheck antiguo */
+      }
+    }
+    return salida;
+  }
+
+  el.run.addEventListener("click", () => {
+    if (corriendo) return;
+    pedirPermisoAviso();
+    ejecutar({ soloConsulta: false });
+  });
+
+  el.consultar.addEventListener("click", () => {
+    if (corriendo) return;
+    ejecutar({ soloConsulta: true });
+  });
+
+  // Enter en el cuadro de documentos = consultar: es lo que se hace mas
+  // veces y no toca nada, asi que no hay riesgo de dispararlo sin querer.
+  el.dnis.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey) && !corriendo) {
+      ev.preventDefault();
+      ejecutar({ soloConsulta: true });
+    }
+  });
+
+  el.stop.addEventListener("click", () => {
+    abortador?.abort();
+    consola("abortando...", "warn");
+  });
+
+  refrescar();
+  comprobarBase();
+  cargarAreas();
+
+  return { comprobarBase, contexto: () => contexto };
+}

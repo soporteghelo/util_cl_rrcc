@@ -1,0 +1,97 @@
+/**
+ * Fotocheck en un panel flotante, sin fondo oscuro: se puede seguir editando
+ * las tarjetas mientras esta abierto, y la vista se redibuja con cada cambio
+ * (`actualizarFotocheck`). La foto y el fotocheck antiguo ya vienen resueltos
+ * desde la corrida, asi que no se vuelve a pedir nada al servidor.
+ *
+ * La vista en pantalla se dibuja a escala 1 para que redibujar sea barato; el
+ * PNG y el Word se generan a 3x en el momento de descargarlos.
+ */
+
+import { $, descargarBlob } from "./comun.js";
+import { dibujarFotocheck, PROPORCION } from "../lib/fotocheck.js";
+import { armarAutorizacion } from "../lib/docx.js";
+
+/** { clave, persona, foto, antiguo, config } de lo que muestra el panel. */
+let actual = null;
+let pedido = 0;
+
+/** ¿Esta abierto el panel con el fotocheck de esa persona? (`clave` = su DNI en la lista) */
+export function fotocheckAbiertoDe(clave) {
+  return Boolean(actual) && !$("fc-modal")?.hidden && actual.clave === clave;
+}
+
+export function cerrarFotocheck() {
+  const panel = $("fc-modal");
+  if (panel) panel.hidden = true;
+  actual = null;
+  pedido++; // un dibujo en curso ya no debe pintarse
+  document.dispatchEvent(new CustomEvent("fotocheck:cerrado"));
+}
+
+async function dibujar() {
+  const lienzo = $("fc-canvas");
+  if (!actual || !lienzo) return;
+  const mio = ++pedido;
+  const { persona, foto } = actual;
+
+  $("fc-titulo").textContent = `${persona.nombreCompleto || persona.dni} · ${persona.codigo || ""}`.trim();
+  const dibujo = await dibujarFotocheck(persona, { foto, escala: 1 });
+  if (mio !== pedido) return; // llego otra actualizacion mientras se dibujaba
+
+  lienzo.width = PROPORCION.ancho;
+  lienzo.height = PROPORCION.alto;
+  lienzo.getContext("2d").drawImage(dibujo, 0, 0);
+}
+
+/**
+ * Abre el panel con esta persona. `clave` identifica a quien pertenece para
+ * que solo sus cambios lo actualicen; `config` lleva las medidas del Word y
+ * `antiguo` la foto del fotocheck viejo, si se pudo bajar de Drive.
+ */
+export async function abrirFotocheck(persona, { clave = persona.dni, foto = null, antiguo = null, config = {} } = {}) {
+  const panel = $("fc-modal");
+  if (!panel || !$("fc-canvas")) return;
+  actual = { clave, persona, foto, antiguo, config };
+  panel.hidden = false;
+  await dibujar();
+}
+
+/** Redibuja el panel abierto con datos nuevos; no hace nada si esta cerrado. */
+export async function actualizarFotocheck(persona, opciones = {}) {
+  if (!actual || $("fc-modal")?.hidden) return;
+  actual = { ...actual, ...opciones, persona };
+  await dibujar();
+}
+
+export function montarModalFotocheck() {
+  $("fc-cerrar")?.addEventListener("click", cerrarFotocheck);
+
+  // el PNG y el Word salen a 3x, dibujados con lo que muestra el panel ahora
+  const enAlta = async () => {
+    const alta = await dibujarFotocheck(actual.persona, { foto: actual.foto });
+    return new Promise((r) => alta.toBlob(r, "image/png"));
+  };
+
+  $("fc-png")?.addEventListener("click", async () => {
+    if (!actual) return;
+    const persona = actual.persona;
+    descargarBlob(await enAlta(), `FOTOCHECK_${persona.nombreCompleto || persona.dni}.png`);
+  });
+
+  $("fc-docx")?.addEventListener("click", async () => {
+    if (!actual) return;
+    const { persona, antiguo, config } = actual;
+    const blob = await enAlta();
+    const docx = await armarAutorizacion({
+      fotocheck: { datos: await blob.arrayBuffer(), mime: "image/png" },
+      antiguo,
+      medidas: {
+        fotocheckAnchoCm: Number(config.FOTOCHECK_ANCHO_CM || 10),
+        fotocheckAltoCm: Number(config.FOTOCHECK_ALTO_CM || 8),
+        antiguoAnchoCm: Number(config.ANTIGUO_ANCHO_CM || 11.5),
+      },
+    });
+    descargarBlob(docx, `Autorizacion_RRCC_${persona.nombreCompleto || persona.dni}.docx`);
+  });
+}

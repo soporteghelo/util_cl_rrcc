@@ -7,7 +7,7 @@
  */
 
 import { jomiserBuscar, normalizarDni } from "./_lib/nexa.js";
-import { driveBuscar } from "./_lib/drive.js";
+import { induccionBuscar, driveBuscarRespaldo, sinRespaldoInnecesario } from "./_lib/drive.js";
 import { einLogin, einBuscar } from "./_lib/ein.js";
 
 /**
@@ -71,10 +71,11 @@ export default async function handler(req, res) {
       avisos: [],
     };
 
-    const [jomiser, drive, ein] = await Promise.allSettled([
+    const [jomiser, drive, ein, respaldo] = await Promise.allSettled([
       jomiserBuscar(norm.dni),
-      driveBuscar(norm.dni),
+      induccionBuscar(norm.dni),
       buscarEin(norm.dni),
+      driveBuscarRespaldo(norm.dni),
     ]);
 
     if (jomiser.status === "fulfilled") {
@@ -98,6 +99,15 @@ export default async function handler(req, res) {
       if (!salida.participante && ein.value.participante) salida.participante = ein.value.participante;
     } else {
       salida.avisos.push(`EIN: ${ein.reason?.message || String(ein.reason)}`);
+    }
+
+    if (respaldo.status === "fulfilled") {
+      salida.avisos.push(...respaldo.value.avisos);
+      salida.items = sinRespaldoInnecesario(salida.items.concat(respaldo.value.items));
+      const usados = salida.items.filter((i) => i.respaldo).map((i) => i.codigo);
+      if (usados.length) salida.avisos.push(`Drive (respaldo): certificado(s) de ${[...new Set(usados)].join(", ")} que no vienen de JOMISER ni de EIN`);
+    } else {
+      salida.avisos.push(`Drive (respaldo): ${respaldo.reason?.message || String(respaldo.reason)}`);
     }
 
     salida.total = salida.items.filter((i) => i.descargable).length;

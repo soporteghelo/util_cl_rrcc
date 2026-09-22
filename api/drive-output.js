@@ -1,0 +1,201 @@
+/**
+ * POST /api/drive-output
+ * Body: { accion, ... }
+ *
+ * Salidas a Google Drive: la carpeta de cada persona, sus certificados
+ * vigentes, el Word de autorizacion y las fotos.
+ *
+ *   carpeta  ->  { nombre } crea (o reutiliza) la subcarpeta de la persona
+ *   carpetas ->  comprueba que DATA y FOTOS existan y sean accesibles
+ *   subir    ->  { carpetaId, nombre, mime, datos } un archivo (base64)
+ *   foto     ->  sube una foto a la carpeta FOTOS
+ *   foto-de  ->  { dni } baja la foto de esa persona, buscandola por nombre
+ *   bajar    ->  { id } el contenido de un archivo, en base64
+ *   listar   ->  { carpetaId } que quedo dentro
+ *
+ * Un archivo por llamada, igual que /api/download: la funcion tiene 60 s y
+ * 4.5 MB por peticion, asi que quien va encadenando es el navegador.
+ */
+
+import {
+  carpetaPara,
+  subirArchivo,
+  bajarArchivo,
+  infoArchivo,
+  listarCarpeta,
+  buscarFoto,
+  carpetaSalidas,
+  carpetaFotos,
+  carpetaRaiz,
+} from "./_lib/drive-escritura.js";
+import { hayCuentaDeServicio } from "./_lib/google.js";
+import { appsScriptUrl, pedirAppsScript } from "./_lib/apps-script.js";
+import { driveFotoBuscar } from "./_lib/drive.js";
+
+/** Tope defensivo: Vercel corta el cuerpo en 4.5 MB de todos modos. */
+const MAX_BYTES = 4 * 1024 * 1024;
+
+function limpiarNombre(texto, max = 120) {
+  return (
+    String(texto ?? "")
+      .replace(/[\\/:*?"<>|\r\n\t]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/^\.+|\.+$/g, "")
+      .slice(0, max)
+      .trim() || "SIN_NOMBRE"
+  );
+}
+
+function decodificar(datos) {
+  if (!datos) throw new Error("falta el contenido del archivo (base64)");
+  const limpio = String(datos).replace(/^data:[^;]+;base64,/, "");
+  const buffer = Buffer.from(limpio, "base64");
+  if (!buffer.length) throw new Error("el contenido llego vacio");
+  if (buffer.length > MAX_BYTES) throw new Error(`el archivo pesa ${(buffer.length / 1048576).toFixed(1)} MB (maximo 4 MB)`);
+  return buffer;
+}
+
+/* ------------------------------------------------------------------ */
+/* Acciones                                                            */
+/* ------------------------------------------------------------------ */
+
+async function accionCarpeta({ nombre, padre }) {
+  const limpio = limpiarNombre(nombre);
+  const r = await carpetaPara(limpio, padre || (await carpetaSalidas()));
+  return { ok: true, carpetaId: r.id, nombre: r.nombre, creada: r.creada };
+}
+
+/** Comprueba que las carpetas de trabajo existan y sean accesibles. */
+async function accionCarpetas() {
+  const [salidas, fotos] = await Promise.all([carpetaSalidas(), carpetaFotos()]);
+  return {
+    ok: Boolean(salidas && fotos),
+    raiz: carpetaRaiz(),
+    salidas,
+    fotos,
+    faltan: [!salidas ? "carpeta de salidas (DATA)" : null, !fotos ? "carpeta de fotos (FOTOS)" : null].filter(
+      Boolean
+    ),
+  };
+}
+
+/**
+ * Foto de una persona por su documento, sin depender de lo que diga la
+ * columna FOTO: se busca por nombre en la carpeta FOTOS.
+ */
+async function accionFotoDe({ dni }) {
+  const archivo = await buscarFoto(dni);
+  if (!archivo) return { ok: false, encontrada: false, dni };
+  const buffer = await bajarArchivo(archivo.id);
+  return {
+    ok: true,
+    encontrada: true,
+    id: archivo.id,
+    nombre: archivo.name,
+    mime: archivo.mimeType || "image/png",
+    datos: buffer.toString("base64"),
+  };
+}
+
+async function accionSubir({ carpetaId, nombre, mime, datos, reemplazar }) {
+  if (!carpetaId) throw new Error("falta carpetaId");
+  const r = await subirArchivo({
+    nombre: limpiarNombre(nombre),
+    mime,
+    datos: decodificar(datos),
+    carpetaId,
+    reemplazar: reemplazar !== false,
+  });
+  return { ok: true, ...r };
+}
+
+async function accionFoto({ nombre, mime, datos, carpetaId }) {
+  const destino = carpetaId || (await carpetaFotos());
+  if (!destino) throw new Error("no se encontro la carpeta FOTOS en Drive");
+  return accionSubir({ carpetaId: destino, nombre, mime, datos });
+}
+
+async function accionBajar({ id }) {
+  const info = await infoArchivo(id);
+  const buffer = await bajarArchivo(id);
+  if (buffer.length > MAX_BYTES) {
+    throw new Error(`"${info?.name || id}" pesa ${(buffer.length / 1048576).toFixed(1)} MB y no cabe en una respuesta`);
+  }
+  return {
+    ok: true,
+    id,
+    nombre: info?.name || "",
+    mime: info?.mimeType || "application/octet-stream",
+    datos: buffer.toString("base64"),
+  };
+}
+
+async function accionListar({ carpetaId }) {
+  if (!carpetaId) throw new Error("falta carpetaId");
+  return { ok: true, archivos: await listarCarpeta(carpetaId) };
+}
+
+/* ------------------------------------------------------------------ */
+/* Handler                                                             */
+/* ------------------------------------------------------------------ */
+
+const ACCIONES = {
+  carpeta: accionCarpeta,
+  carpetas: accionCarpetas,
+  subir: accionSubir,
+  foto: accionFoto,
+  "foto-de": accionFotoDe,
+  bajar: accionBajar,
+  listar: accionListar,
+};
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Usa POST" });
+    return;
+  }
+
+  try {
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
+    const accion = String(body.accion || "").trim();
+    const fn = ACCIONES[accion];
+    if (!fn) {
+      res.status(400).json({ error: `accion desconocida: "${accion}"`, disponibles: Object.keys(ACCIONES) });
+      return;
+    }
+
+    if (appsScriptUrl()) {
+      // La lectura de FOTOS es publica y se resuelve directo por nombre. Asi
+      // evitamos que Apps Script recorra toda la carpeta y agote su tiempo.
+      if (accion === "foto-de") {
+        const archivo = await driveFotoBuscar(body.dni);
+        if (archivo) {
+          res.status(200).json({
+            ok: true,
+            encontrada: true,
+            id: archivo.id,
+            nombre: archivo.name,
+            mime: archivo.mimeType || "image/png",
+            datos: archivo.datos.toString("base64"),
+          });
+          return;
+        }
+      }
+      res.status(200).json(await pedirAppsScript("drive", body));
+      return;
+    }
+
+    if (!hayCuentaDeServicio()) {
+      res.status(503).json({
+        error: "Drive de escritura no esta configurado",
+        faltan: ["APPS_SCRIPT_URL (recomendado) o GOOGLE_SA_EMAIL + GOOGLE_SA_PRIVATE_KEY"],
+      });
+      return;
+    }
+
+    res.status(200).json(await fn(body));
+  } catch (e) {
+    res.status(502).json({ error: e?.message || String(e) });
+  }
+}
