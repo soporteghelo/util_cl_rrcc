@@ -8,7 +8,7 @@
  * reporte de lo guardado, no vuelve a verificar certificados.
  */
 
-import { $, crearConsola, notificar } from "./comun.js";
+import { $, crearConsola, crearMultiSelect, notificar } from "./comun.js";
 import { cargarContexto, listarPersonal } from "../lib/renovacion.js";
 import { personasPorRiesgo, aFormatoCorto } from "../../shared/estados.js";
 import { RRCC } from "../../shared/rrcc.js";
@@ -40,8 +40,6 @@ export function montarEstado() {
 
   const el = {
     buscar: $("es-buscar"),
-    riesgo: $("es-riesgo"),
-    estado: $("es-estado"),
     orden: $("es-orden"),
     cargar: $("es-cargar"),
     imprimir: $("es-imprimir"),
@@ -55,9 +53,16 @@ export function montarEstado() {
   let descendente = false;
   let cargando = false;
 
-  el.riesgo.innerHTML =
-    `<option value="">TODOS LOS RRCC</option>` +
-    RRCC.map((r) => `<option value="${r.codigo}">${r.codigo} · ${escaparHtml(r.rotulo)}</option>`).join("");
+  const selRiesgo = crearMultiSelect(
+    "es-riesgo",
+    RRCC.map((r) => ({ valor: r.codigo, etiqueta: `${r.codigo} · ${r.rotulo}` })),
+    { textoTodos: "TODOS LOS RRCC", resumen: (op) => op.valor }
+  );
+  const selEstado = crearMultiSelect(
+    "es-estado",
+    ["VENCIDO", "ACTUALIZAR", "VIGENTE", "NO APLICA"].map((e) => ({ valor: e, etiqueta: e })),
+    { textoTodos: "TODOS LOS ESTADOS" }
+  );
 
   function actualizarBotonOrden() {
     el.orden.textContent = descendente ? "VIGENTE → VENCIDO" : "VENCIDO → POR VENCER";
@@ -98,19 +103,19 @@ export function montarEstado() {
 
   function pintar() {
     const textoFiltro = el.buscar.value.trim().toUpperCase();
-    const riesgoFiltro = el.riesgo.value;
-    const estadoFiltro = el.estado.value;
+    const riesgosFiltro = selRiesgo.obtener();
+    const estadosFiltro = selEstado.obtener();
     const umbrales = {
       vencido: Number(contexto?.config?.UMBRAL_VENCIDO ?? 365),
       actualizar: Number(contexto?.config?.UMBRAL_ACTUALIZAR ?? 330),
     };
 
     const grupos = personasPorRiesgo(personas, { descendente, umbrales })
-      .filter((g) => !riesgoFiltro || g.codigo === riesgoFiltro)
+      .filter((g) => riesgosFiltro.size === 0 || riesgosFiltro.has(g.codigo))
       .map((g) => ({
         ...g,
         items: g.items
-          .filter((it) => !estadoFiltro || it.estado === estadoFiltro)
+          .filter((it) => estadosFiltro.size === 0 || estadosFiltro.has(it.estado))
           .filter(
             (it) =>
               !textoFiltro ||
@@ -157,8 +162,8 @@ export function montarEstado() {
 
   el.cargar.addEventListener("click", cargar);
   el.buscar.addEventListener("input", pintar);
-  el.riesgo.addEventListener("change", pintar);
-  el.estado.addEventListener("change", pintar);
+  selRiesgo.alCambiar(pintar);
+  selEstado.alCambiar(pintar);
   el.orden.addEventListener("click", () => {
     descendente = !descendente;
     actualizarBotonOrden();

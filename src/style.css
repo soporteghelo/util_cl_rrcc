@@ -256,9 +256,9 @@ h1 {
 }
 .lnk:hover { color: var(--cy); border-color: var(--cy); }
 
-.panel-body { padding: 12px; min-height: 0; overflow-y: auto; }
+.panel-body { padding: 12px; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .panel-body-flush { padding: 0; flex: 1 1 auto; display: flex; min-height: 0; overflow: hidden; }
-.panel-body-scroll { flex: 1 1 auto; overflow-y: auto; }
+.panel-body-scroll { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
 /* el panel de accion nunca se encoge: siempre debe verse el boton de inicio */
 .panel-go .panel-body { overflow: visible; }
@@ -270,6 +270,7 @@ h1 {
   flex-direction: column;
   gap: 10px;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .panel-foot {
@@ -620,6 +621,7 @@ h1 {
   min-height: 0;
   overflow-y: auto;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   padding: 11px;
   font-size: 11.5px;
   line-height: 1.7;
@@ -758,6 +760,13 @@ h1 {
 
 @media (max-width: 900px) {
   body { height: auto; overflow: auto; font-size: 13px; }
+
+  /* .grid-bg y .scanlines son capas fijas de pantalla completa con mascara y
+     mezcla ("mix-blend-mode"): en moviles de gama baja el navegador las
+     vuelve a componer en cada frame de scroll, y el deslizamiento se siente
+     trabado o directamente no responde. Puramente decorativas, se quitan
+     aqui sin que se note en el uso real. */
+  .grid-bg, .scanlines { display: none; }
 
   .wrap {
     display: block;
@@ -982,7 +991,7 @@ input[type="date"].inp { color-scheme: dark; }
 .ficha-cuerpo { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 15%); border-top: 1px solid var(--line-soft); }
 .rrcc-principal { min-width: 0; }
 .certificados-lateral { border-left: 1px solid var(--line-soft); display: grid; grid-template-rows: 1fr 1fr; min-height: 280px; }
-.cert-panel { min-height: 0; overflow: auto; padding: 8px; }
+.cert-panel { min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; padding: 8px; }
 .cert-panel + .cert-panel { border-top: 1px solid var(--line-soft); }
 .cert-head { display: flex; justify-content: space-between; align-items: center; color: var(--cy); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; padding: 2px 2px 7px; }
 .cert-head span { color: var(--tx-mute); border: 1px solid var(--line); border-radius: 10px; padding: 1px 6px; }
@@ -1346,6 +1355,7 @@ select.rc-tipo option { color: var(--tx); background: #05090f; }
 .col {
   overflow-y: auto;
   overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
 }
@@ -1369,6 +1379,62 @@ select.rc-tipo option { color: var(--tx); background: #05090f; }
 #es-orden { width: 100%; justify-content: space-between; }
 #es-orden[aria-pressed="true"] { border-color: var(--am); color: var(--am); }
 #es-orden::after { content: "⇅"; opacity: 0.7; }
+
+/* Filtros de riesgo/estado con seleccion multiple: boton estilo .inp que
+   abre un desplegable de casillas, igual de compacto que el select que
+   reemplaza pero permite marcar varias opciones a la vez. */
+.msel { position: relative; }
+
+.msel-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--gr);
+  text-align: left;
+}
+.msel-btn .msel-car { flex: 0 0 auto; color: var(--tx-dim); font-size: 10px; transition: transform 0.15s, color 0.15s; }
+.msel-btn[aria-expanded="true"] { border-color: var(--cy); box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.13); }
+.msel-btn[aria-expanded="true"] .msel-car { transform: rotate(180deg); color: var(--cy); }
+
+.msel-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  padding: 4px;
+  background: #060b12;
+  border: 1px solid var(--cy);
+  border-radius: 3px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+  max-height: 260px;
+  overflow-y: auto;
+}
+.msel-panel[hidden] { display: none; }
+
+.msel-acciones {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 5px 6px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.msel-acciones .lnk { margin-left: 0; font-size: 9.5px; }
+
+.msel-op {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 7px;
+  border-radius: 2px;
+  font-size: 11px;
+  color: var(--tx);
+  cursor: pointer;
+}
+.msel-op:hover { background: rgba(34, 211, 238, 0.14); }
+.msel-op input { width: 13px; height: 13px; margin: 0; accent-color: var(--cy); cursor: pointer; flex: 0 0 auto; }
 
 .estado-vacio {
   padding: 24px 14px;

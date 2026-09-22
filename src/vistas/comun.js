@@ -170,6 +170,107 @@ export function montarPestanas(pares, inicial = 0) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Filtro de seleccion multiple                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Convierte `#idBase` (un `.msel` con su boton `#idBase-btn` y su panel
+ * `.msel-panel`, ya en el HTML) en un desplegable de casillas: se puede
+ * marcar mas de una opcion a la vez, a diferencia de un `<select>` normal.
+ * Sin nada marcado se entiende "todos" (sin filtro).
+ *
+ * `opciones` es `[{ valor, etiqueta }]`. `resumen(opcion)` decide que texto
+ * mostrar en el boton cuando hay una sola opcion marcada (por defecto, su
+ * etiqueta); con varias marcadas se muestra "N SELECCIONADOS".
+ */
+export function crearMultiSelect(idBase, opciones, { textoTodos = "TODOS", resumen = (op) => op.etiqueta } = {}) {
+  const raiz = $(idBase);
+  const boton = $(`${idBase}-btn`);
+  const panel = raiz?.querySelector(".msel-panel");
+  const texto = boton?.querySelector(".msel-txt");
+  const seleccion = new Set();
+  let alCambiar = () => {};
+
+  if (!raiz || !boton || !panel || !texto) {
+    return { obtener: () => seleccion, alCambiar: (fn) => (alCambiar = fn) };
+  }
+
+  function actualizarTexto() {
+    const n = seleccion.size;
+    texto.textContent =
+      n === 0 ? textoTodos : n === 1 ? resumen(opciones.find((o) => seleccion.has(o.valor))) : `${n} seleccionados`.toUpperCase();
+  }
+
+  function render() {
+    panel.textContent = "";
+
+    const acciones = document.createElement("div");
+    acciones.className = "msel-acciones";
+    const limpiar = document.createElement("button");
+    limpiar.type = "button";
+    limpiar.className = "lnk";
+    limpiar.textContent = "LIMPIAR";
+    limpiar.addEventListener("click", () => {
+      seleccion.clear();
+      panel.querySelectorAll("input[type=checkbox]").forEach((c) => (c.checked = false));
+      actualizarTexto();
+      alCambiar();
+    });
+    acciones.appendChild(limpiar);
+    panel.appendChild(acciones);
+
+    for (const op of opciones) {
+      const etiqueta = document.createElement("label");
+      etiqueta.className = "msel-op";
+      const caja = document.createElement("input");
+      caja.type = "checkbox";
+      caja.setAttribute("role", "option");
+      caja.checked = seleccion.has(op.valor);
+      caja.addEventListener("change", () => {
+        if (caja.checked) seleccion.add(op.valor);
+        else seleccion.delete(op.valor);
+        actualizarTexto();
+        alCambiar();
+      });
+      etiqueta.appendChild(caja);
+      etiqueta.appendChild(document.createTextNode(op.etiqueta));
+      panel.appendChild(etiqueta);
+    }
+  }
+
+  function abierto() {
+    return !panel.hidden;
+  }
+  function abrir() {
+    panel.hidden = false;
+    boton.setAttribute("aria-expanded", "true");
+  }
+  function cerrar() {
+    panel.hidden = true;
+    boton.setAttribute("aria-expanded", "false");
+  }
+
+  boton.addEventListener("click", () => (abierto() ? cerrar() : abrir()));
+  raiz.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && abierto()) {
+      cerrar();
+      boton.focus();
+    }
+  });
+  document.addEventListener("click", (ev) => {
+    if (abierto() && !raiz.contains(ev.target)) cerrar();
+  });
+
+  render();
+  actualizarTexto();
+
+  return {
+    obtener: () => seleccion,
+    alCambiar: (fn) => (alCambiar = fn),
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* Portapapeles                                                        */
 /* ------------------------------------------------------------------ */
 

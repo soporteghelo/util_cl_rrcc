@@ -374,17 +374,23 @@
                 placeholder="ej. LOPEZ, 71481337, MINA"
               />
 
-              <label class="lbl" for="es-riesgo">Riesgo crítico</label>
-              <select class="inp" id="es-riesgo"></select>
+              <label class="lbl" for="es-riesgo-btn">Riesgo crítico</label>
+              <div class="msel" id="es-riesgo">
+                <button class="inp msel-btn" id="es-riesgo-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="msel-txt">TODOS LOS RRCC</span>
+                  <span class="msel-car">▾</span>
+                </button>
+                <div class="msel-panel" role="listbox" aria-multiselectable="true" hidden></div>
+              </div>
 
-              <label class="lbl" for="es-estado">Estado</label>
-              <select class="inp" id="es-estado">
-                <option value="">TODOS LOS ESTADOS</option>
-                <option value="VENCIDO">VENCIDO</option>
-                <option value="ACTUALIZAR">ACTUALIZAR</option>
-                <option value="VIGENTE">VIGENTE</option>
-                <option value="NO APLICA">NO APLICA</option>
-              </select>
+              <label class="lbl" for="es-estado-btn">Estado</label>
+              <div class="msel" id="es-estado">
+                <button class="inp msel-btn" id="es-estado-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="msel-txt">TODOS LOS ESTADOS</span>
+                  <span class="msel-car">▾</span>
+                </button>
+                <div class="msel-panel" role="listbox" aria-multiselectable="true" hidden></div>
+              </div>
 
               <label class="lbl">Orden</label>
               <button class="btn btn-ghost" id="es-orden" type="button" aria-pressed="false"></button>
