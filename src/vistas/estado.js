@@ -65,6 +65,7 @@ export function montarEstado() {
     count: $("es-count"),
     resCount: $("es-res-count"),
     resultados: $("es-resultados"),
+    resumenRiesgo: $("es-resumen-riesgo"),
   };
 
   let personas = [];
@@ -83,11 +84,6 @@ export function montarEstado() {
     "es-estado",
     ["VENCIDO", "ACTUALIZAR", "VIGENTE", "NO APLICA"].map((e) => ({ valor: e, etiqueta: e })),
     { textoTodos: "TODOS LOS ESTADOS" }
-  );
-  const selTrabajador = crearMultiSelect(
-    "es-trabajador",
-    ["ACTIVO", "CESADO"].map((e) => ({ valor: e, etiqueta: e })),
-    { textoTodos: "TODOS" }
   );
 
   function actualizarBotonOrden() {
@@ -167,29 +163,38 @@ export function montarEstado() {
     const textoFiltro = el.buscar.value.trim().toUpperCase();
     const riesgosFiltro = selRiesgo.obtener();
     const estadosFiltro = selEstado.obtener();
-    const trabajadorFiltro = selTrabajador.obtener();
     const umbrales = {
       vencido: Number(contexto?.config?.UMBRAL_VENCIDO ?? configSnapshot?.UMBRAL_VENCIDO ?? 365),
       actualizar: Number(contexto?.config?.UMBRAL_ACTUALIZAR ?? configSnapshot?.UMBRAL_ACTUALIZAR ?? 330),
     };
 
-    const grupos = personasPorRiesgo(personas, { descendente, umbrales })
+    // Todos los RRCC con el filtro de estado/activo/texto ya aplicado, ANTES
+    // de recortar por "riesgo critico": de aca sale tanto el resumen de la
+    // izquierda (cuenta por RRCC, los 18) como las tablas de la derecha
+    // (solo los RRCC elegidos, y sin las que quedan en 0).
+    const gruposFiltrados = personasPorRiesgo(personas, { descendente, umbrales }).map((g) => ({
+      ...g,
+      items: g.items
+        .filter((it) => (it.persona.estadoTrabajador || "").toUpperCase() === "ACTIVO")
+        .filter((it) => estadosFiltro.size === 0 || estadosFiltro.has(it.estado))
+        .filter(
+          (it) =>
+            !textoFiltro ||
+            [it.persona.nombreCompleto, it.persona.dni, it.persona.area, it.persona.cargo].some((v) =>
+              String(v || "").toUpperCase().includes(textoFiltro)
+            )
+        ),
+    }));
+
+    el.resumenRiesgo.innerHTML = personas.length
+      ? [...gruposFiltrados]
+          .sort((a, b) => b.items.length - a.items.length)
+          .map((g) => `<div class="resumen-riesgo-fila"><b>${g.codigo}</b><span>${escaparHtml(g.rotulo)}</span><em>${g.items.length}</em></div>`)
+          .join("")
+      : "";
+
+    const grupos = gruposFiltrados
       .filter((g) => riesgosFiltro.size === 0 || riesgosFiltro.has(g.codigo))
-      .map((g) => ({
-        ...g,
-        items: g.items
-          .filter((it) => estadosFiltro.size === 0 || estadosFiltro.has(it.estado))
-          .filter(
-            (it) => trabajadorFiltro.size === 0 || trabajadorFiltro.has((it.persona.estadoTrabajador || "").toUpperCase())
-          )
-          .filter(
-            (it) =>
-              !textoFiltro ||
-              [it.persona.nombreCompleto, it.persona.dni, it.persona.area, it.persona.cargo].some((v) =>
-                String(v || "").toUpperCase().includes(textoFiltro)
-              )
-          ),
-      }))
       .filter((g) => g.items.length);
 
     el.resultados.innerHTML = grupos.length
@@ -276,7 +281,6 @@ export function montarEstado() {
   el.buscar.addEventListener("input", pintar);
   selRiesgo.alCambiar(pintar);
   selEstado.alCambiar(pintar);
-  selTrabajador.alCambiar(pintar);
   el.orden.addEventListener("click", () => {
     descendente = !descendente;
     ordenPorGrupo.clear(); // el orden global vuelve a mandar en todos los grupos

@@ -368,6 +368,23 @@ h1 {
 .avisos { flex: 0 0 auto; display: grid; gap: 9px; }
 .avisos:empty { display: none; }
 
+/* Resumen "cuantas personas por RRCC" del panel de filtros de ESTADO RRCC:
+   los 18 riesgos con el conteo que dejan los filtros ya aplicados. */
+.resumen-riesgo { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+.resumen-riesgo:empty { display: none; }
+.resumen-riesgo-fila {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  font-size: 10.5px;
+}
+.resumen-riesgo-fila b { flex: 0 0 auto; width: 30px; color: var(--cy); }
+.resumen-riesgo-fila span { flex: 1 1 auto; min-width: 0; color: var(--tx-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resumen-riesgo-fila em { flex: 0 0 auto; min-width: 20px; padding: 1px 6px; text-align: center; font-style: normal; font-weight: 700; color: var(--tx); background: rgba(34, 211, 238, 0.08); border: 1px solid var(--line); border-radius: 10px; }
+
 /* ---------------- botones ---------------- */
 
 .btn {
@@ -1295,6 +1312,28 @@ button.cert-fecha:hover, button.cert-fecha:focus-visible { background: rgba(0, 2
 .campo-area input { width: 108px; }
 .campo-ficha.editado { border-color: var(--am); box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.35); }
 .campo-area .ac-lista { min-width: 210px; right: auto; }
+
+/* Nombre, cargo y empresa editables en la cabecera de la ficha de renovacion:
+   se ven como el texto plano de antes pero son inputs, igual que EMO/area. */
+.card-nom-editable { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 5px; }
+.card-nom-sep { color: var(--tx-mute); }
+.campo-nom {
+  min-width: 60px;
+  max-width: 100%;
+  padding: 1px 4px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--tx);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 1px dashed var(--line);
+  border-radius: 2px;
+}
+.campo-nom-cargo { color: var(--tx-dim); font-weight: 600; }
+.campo-nom:focus { outline: none; border-color: var(--cy); background: rgba(34, 211, 238, 0.08); }
+.campo-nom::placeholder { color: var(--tx-mute); font-weight: 400; }
+.campo-nom.editado { border-color: var(--am); background: rgba(251, 191, 36, 0.1); }
 
 
 /* Fotocheck: panel flotante abajo a la derecha, sin fondo oscuro ni bloqueo, para

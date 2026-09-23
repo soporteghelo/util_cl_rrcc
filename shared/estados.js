@@ -678,6 +678,10 @@ export function aplicarEdicionesManuales(fila, ediciones, opciones = {}) {
 export const DATOS_EDITABLES = {
   "F. Vencimiento": { tipo: "fecha", codigo: "EMO", campo: "vencimiento del EMO" },
   "Area Planilla": { tipo: "texto", codigo: "AREA", campo: "área" },
+  Apellidos: { tipo: "texto", codigo: "APELLIDOS", campo: "apellidos" },
+  Nombres: { tipo: "texto", codigo: "NOMBRES", campo: "nombres" },
+  "Cargo Planilla": { tipo: "texto", codigo: "CARGO", campo: "cargo" },
+  EMPRESA: { tipo: "texto", codigo: "EMPRESA", campo: "empresa" },
 };
 
 /**

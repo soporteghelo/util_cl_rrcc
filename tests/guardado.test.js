@@ -309,5 +309,5 @@ test("cargarImagen acepta blobs para que el fotocheck no quede sin foto", async 
 
 test("la API de Sheets rechaza una columna no editable antes de llamar a Google", async () => {
   await assert.rejects(escribirDatosPersonales(12, { DNI: "1" }), /columna no editable/);
-  await assert.rejects(escribirDatosPersonales(12, { "F. Vencimiento": "2027-01-15", Apellidos: "X" }), /columna no editable/);
+  await assert.rejects(escribirDatosPersonales(12, { "F. Vencimiento": "2027-01-15", Guardia: "X" }), /columna no editable/);
 });

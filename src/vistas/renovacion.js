@@ -217,7 +217,14 @@ export function montarRenovacion() {
       la hoja no trae el vencimiento se toma el examen + 365 dias, como el fotocheck. */
   function datosBase(ficha) {
     const h = filaDeHoja(ficha);
-    return { emoVenc: h.vencimientoEmo || (h.examenMedico ? sumarDias(h.examenMedico, 365) : ""), area: h.area };
+    return {
+      emoVenc: h.vencimientoEmo || (h.examenMedico ? sumarDias(h.examenMedico, 365) : ""),
+      area: h.area,
+      apellidos: h.apellidos,
+      nombres: h.nombres,
+      cargo: h.cargo,
+      empresa: h.empresa,
+    };
   }
 
   /** Lo que muestran los campos de EMO y area: la hoja, o lo editado encima. */
@@ -233,6 +240,10 @@ export function montarRenovacion() {
     const d = datosVisibles(ficha);
     fila[INDICE["F. Vencimiento"]] = d.emoVenc;
     fila[INDICE["Area Planilla"]] = d.area;
+    fila[INDICE["Apellidos"]] = d.apellidos;
+    fila[INDICE["Nombres"]] = d.nombres;
+    fila[INDICE["Cargo Planilla"]] = d.cargo;
+    fila[INDICE["EMPRESA"]] = d.empresa;
     return leerFila(fila);
   }
 
@@ -703,7 +714,8 @@ export function montarRenovacion() {
     setTimeout(() => URL.revokeObjectURL(url), 4000);
   }
 
-  /** Anota (o retira) una correccion del EMO o del area y refresca lo que depende de ella. */
+  /** Anota (o retira) una correccion de un dato de la ficha (EMO, area, nombre,
+      cargo, empresa) y refresca lo que depende de ella. */
   function editarDatos(dni, card, cambio) {
     const ficha = fichas.get(dni);
     ficha.salidaDesactualizada = true;
@@ -714,6 +726,9 @@ export function montarRenovacion() {
 
     card.querySelector(".campo-emo").classList.toggle("editado", actual.emoVenc !== undefined);
     card.querySelector(".campo-area").classList.toggle("editado", actual.area !== undefined);
+    for (const clave of ["apellidos", "nombres", "cargo", "empresa"]) {
+      card.querySelector(`[data-${clave}]`)?.classList.toggle("editado", actual[clave] !== undefined);
+    }
     pintarBarraEdicion(card, ficha);
     refrescarFotocheck(dni);
     programarSincronizacion(dni);
@@ -954,7 +969,15 @@ export function montarRenovacion() {
       `<button class="btn btn-ghost btn-sm" data-descartar-edicion>DESCARTAR</button></div>` +
       `</div>` +
       `<div class="card-head card-head-ren">` +
-      `<span class="card-nom">${persona.nombreCompleto} · ${persona.cargo || "sin cargo"} · <span data-estado-final>${htmlEstadoFinal(persona)}</span></span>` +
+      `<span class="card-nom card-nom-editable">` +
+      `<input type="text" data-apellidos class="campo-nom${datosEdit.apellidos !== undefined ? " editado" : ""}" value="${escaparHtml(persona.apellidos)}" placeholder="apellidos" autocomplete="off" aria-label="Apellidos" title="Apellidos. Se imprime en el fotocheck y se puede corregir aquí" />` +
+      `<input type="text" data-nombres class="campo-nom${datosEdit.nombres !== undefined ? " editado" : ""}" value="${escaparHtml(persona.nombres)}" placeholder="nombres" autocomplete="off" aria-label="Nombres" title="Nombres. Se imprime en el fotocheck y se puede corregir aquí" />` +
+      `<span class="card-nom-sep">·</span>` +
+      `<input type="text" data-cargo class="campo-nom campo-nom-cargo${datosEdit.cargo !== undefined ? " editado" : ""}" value="${escaparHtml(persona.cargo)}" placeholder="sin cargo" autocomplete="off" aria-label="Cargo" title="Cargo de planilla. Se imprime en el fotocheck y se puede corregir aquí" />` +
+      `<span class="card-nom-sep">·</span>` +
+      `<input type="text" data-empresa class="campo-nom campo-nom-cargo${datosEdit.empresa !== undefined ? " editado" : ""}" value="${escaparHtml(persona.empresa)}" placeholder="sin empresa" autocomplete="off" aria-label="Empresa" title="Empresa. Se puede corregir aquí" />` +
+      `<span class="card-nom-sep">·</span>` +
+      `<span data-estado-final>${htmlEstadoFinal(persona)}</span></span>` +
       `<div class="card-c-lista">${RRCC_CABECERA.map((t, i, a) => `<span>${t}${i < a.length - 1 ? " |" : ""}</span>`).join(" ")}</div>` +
       `<span class="card-res">${trozos.join(" · ")}</span>` +
       `</div>` +
@@ -1033,6 +1056,21 @@ export function montarRenovacion() {
     };
     for (const evento of ["input", "change", "blur"]) campoArea.addEventListener(evento, sincronizarArea);
     autocompletar(campoArea, { obtener: () => areasConocidas, nombre: "áreas" });
+
+    // apellidos, nombres, cargo y empresa: mismo patron de sincronizacion que area
+    for (const [selector, clave] of [
+      ["[data-apellidos]", "apellidos"],
+      ["[data-nombres]", "nombres"],
+      ["[data-cargo]", "cargo"],
+      ["[data-empresa]", "empresa"],
+    ]) {
+      const campo = card.querySelector(selector);
+      const sincronizar = () => {
+        const valor = campo.value.trim();
+        if (valor !== datosVisibles(fichas.get(dni))[clave]) editarDatos(dni, card, { [clave]: valor });
+      };
+      for (const evento of ["input", "change", "blur"]) campo.addEventListener(evento, sincronizar);
+    }
     card.querySelectorAll("[data-cert]").forEach((boton) => {
       boton.addEventListener("click", () => abrirCertificado(fichas.get(dni)?.inventario?.[Number(boton.dataset.cert)]));
     });
@@ -1108,6 +1146,9 @@ export function montarRenovacion() {
     });
     if (columnas.includes("F. Vencimiento")) lineas.push(`EMO vence ${aFormatoCorto(hoja.vencimientoEmo) || "sin fecha"}`);
     if (columnas.includes("Area Planilla")) lineas.push(`Área: ${hoja.area || "vacía"}`);
+    if (columnas.includes("Apellidos") || columnas.includes("Nombres")) lineas.push(`Nombre: ${hoja.nombreCompleto || "vacío"}`);
+    if (columnas.includes("Cargo Planilla")) lineas.push(`Cargo: ${hoja.cargo || "vacío"}`);
+    if (columnas.includes("EMPRESA")) lineas.push(`Empresa: ${hoja.empresa || "vacía"}`);
     const dif = guardado.diferencias.map(
       (d) => `${d.codigo} ${d.campo}: se pidió ${aFormatoCorto(d.esperado) || d.esperado || "vacío"}, la hoja tiene ${aFormatoCorto(d.real) || d.real || "vacío"}`
     );
@@ -1153,10 +1194,14 @@ export function montarRenovacion() {
     try {
       const valores = aplicarEdicionesManuales(ficha.valores, ediciones, { config: contexto?.config });
       const codigos = Object.keys(ediciones);
-      // vencimiento del EMO y area: columnas de A:O que se envian aparte
+      // vencimiento del EMO, area, nombre, cargo y empresa: columnas de A:O que se envian aparte
       const datos = {};
       if (datosEdit.emoVenc !== undefined) datos["F. Vencimiento"] = datosEdit.emoVenc;
       if (datosEdit.area !== undefined) datos["Area Planilla"] = datosEdit.area;
+      if (datosEdit.apellidos !== undefined) datos["Apellidos"] = datosEdit.apellidos.toUpperCase();
+      if (datosEdit.nombres !== undefined) datos["Nombres"] = datosEdit.nombres.toUpperCase();
+      if (datosEdit.cargo !== undefined) datos["Cargo Planilla"] = datosEdit.cargo;
+      if (datosEdit.empresa !== undefined) datos["EMPRESA"] = datosEdit.empresa;
       for (const [columna, valor] of Object.entries(datos)) valores[INDICE[columna]] = valor;
       const guardado = await guardarFilaVerificada({ fila: ficha.fila, valores, dni: ficha.persona.dni, codigos, datos });
 
@@ -1183,6 +1228,9 @@ export function montarRenovacion() {
       if (codigos.length) partes.push(`${codigos.length} riesgo(s)`);
       if (datos["F. Vencimiento"] !== undefined) partes.push("EMO");
       if (datos["Area Planilla"] !== undefined) partes.push("área");
+      if (datos["Apellidos"] !== undefined || datos["Nombres"] !== undefined) partes.push("nombre");
+      if (datos["Cargo Planilla"] !== undefined) partes.push("cargo");
+      if (datos["EMPRESA"] !== undefined) partes.push("empresa");
       confirmarGuardado(guardado, codigos, `${partes.join(" + ")} corregido(s) a mano`, Object.keys(datos));
     } catch (e) {
       botones.forEach((b) => (b.disabled = false));
