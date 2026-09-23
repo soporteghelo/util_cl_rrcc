@@ -14,6 +14,7 @@ import "./style.css";
 import { desdeTexto, normalizarDni, normalizarLista } from "./lib/dni.js";
 import { extraerDocumentos } from "./lib/excel.js";
 import { buscar, descargar, sheets } from "./lib/api.js";
+import { precargar } from "./lib/datos.js";
 import {
   EscritorCarpeta,
   descargarZip,
@@ -689,10 +690,19 @@ el.carpeta.addEventListener("click", async () => {
   );
   montarModalFotocheck();
 
-  // La renovacion carga CONFIG y el diccionario una sola vez; el alta de
-  // personal nuevo reutiliza ese mismo contexto en vez de volver a pedirlo.
-  const renovacion = montarRenovacion();
-  montarNuevo({ obtenerContexto: () => renovacion.contexto() });
+  // CONFIG, diccionario de cursos y listado de personal se piden UNA vez y
+  // los comparte `lib/datos.js` entre las cinco pestanas: ninguna vuelve a
+  // bajar lo que otra ya trajo, y lo que se guarda en una se ve en todas.
+  montarRenovacion();
+  montarNuevo();
   montarEstado();
   montarEstadoTotal();
+
+  // Con las vistas ya montadas se empieza a traer la base: el contexto primero
+  // y el listado de personal despues, por el carril de fondo. Asi, para cuando
+  // el usuario llegue a ESTADO RRCC o ESTADO TOTAL, los datos ya estan y las
+  // vistas se pintan solas (escuchan al almacen). Si no hay configuracion de
+  // Google esto falla en silencio y la extraccion de certificados sigue igual,
+  // porque no pasa por Sheets.
+  precargar({ log: (texto, clase) => log(texto, clase === "ok" ? "info" : clase) });
 })();

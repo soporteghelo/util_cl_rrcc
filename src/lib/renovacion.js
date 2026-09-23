@@ -15,7 +15,8 @@
  */
 
 import { buscar, descargar, sheets, drive, aBase64, desdeBase64, blobABase64 } from "./api.js";
-import { construirDiccionario, renovarFila, copiarFila, leerFila, filaNueva, tiposDeMatriz, diferenciasFila } from "../../shared/estados.js";
+import { obtenerContexto, obtenerPersonal, obtenerPersona, anotarPersona } from "./datos.js";
+import { renovarFila, copiarFila, leerFila, filaNueva, tiposDeMatriz, diferenciasFila } from "../../shared/estados.js";
 import { fotocheckPng } from "./fotocheck.js";
 import { armarAutorizacion, medirImagen } from "./docx.js";
 
@@ -25,15 +26,13 @@ export const MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordproc
 /* Contexto (se carga una vez por corrida)                             */
 /* ------------------------------------------------------------------ */
 
-/** CONFIG + diccionario de cursos + matriz por puesto, en una sola llamada. */
-export async function cargarContexto(senal) {
-  const datos = await sheets({ accion: "contexto" }, senal);
-  return {
-    config: datos.config || {},
-    matriz: datos.matriz || [],
-    cursos: datos.cursos || [],
-    diccionario: construirDiccionario(datos.cursos || []),
-  };
+/**
+ * CONFIG + diccionario de cursos + matriz por puesto, en una sola llamada.
+ * Lo sirve `datos.js`: la primera pestana que lo pida lo trae y el resto lo
+ * reutiliza sin volver a preguntarle a la hoja.
+ */
+export function cargarContexto() {
+  return obtenerContexto();
 }
 
 /**
@@ -47,10 +46,13 @@ export async function cargarContexto(senal) {
  * decenas que estan vencidas y activas. Un backend viejo que no reconozca el
  * filtro simplemente lo ignora y sigue devolviendo a todo el mundo: por eso
  * quien llama debe seguir filtrando del lado del navegador igual.
+ *
+ * Lo sirve `datos.js`, que ademas lo comparte entre pestanas: si ESTADO RRCC
+ * ya bajo el listado completo, el filtrado que necesita ESTADO TOTAL sale de
+ * ahi sin tocar la red.
  */
-export async function listarPersonal(senal, filtro) {
-  const datos = await sheets({ accion: "listado", filtro }, senal);
-  return datos.personas || [];
+export function listarPersonal(senal, filtro) {
+  return obtenerPersonal({ filtro });
 }
 
 /**
@@ -82,7 +84,9 @@ const nombreCertificado = (item) =>
  */
 export async function renovarPersona(dni, ctx, { log = () => {}, senal, escribir = true } = {}) {
   log(`buscando ${dni} en la base...`);
-  const registro = await sheets({ accion: "persona", dni }, senal);
+  // lo que va a escribir lee SIEMPRE de la hoja: recalcular sobre una copia
+  // cacheada pisaria lo que otro haya editado desde que se guardo esa copia.
+  const registro = await obtenerPersona(dni, { refrescar: escribir, senal });
 
   if (!registro.encontrada) {
     log(`${dni} no esta en la base: hay que darlo de alta como personal nuevo`, "warn");
@@ -112,6 +116,8 @@ export async function renovarPersona(dni, ctx, { log = () => {}, senal, escribir
       { accion: "guardar", fila: registro.fila, valores: resultado.fila, noMapeados: resultado.noMapeados },
       senal
     );
+    // el resto de las pestanas repinta sola con esta fila: no hay que recargar
+    anotarPersona({ dni, fila: registro.fila, valores: resultado.fila });
     log("fila actualizada en la hoja", "ok");
   }
 
@@ -162,7 +168,9 @@ export async function guardarFilaVerificada({ fila, valores, dni, codigos, datos
 
   let leido = null;
   try {
-    leido = await sheets({ accion: "persona", dni }, senal);
+    // `refrescar` obligatorio: la gracia de este paso es ver lo que quedo en
+    // la hoja, no lo que la app creia que habia
+    leido = await obtenerPersona(dni, { refrescar: true, senal });
   } catch (e) {
     if (errorGuardado) throw errorGuardado; // ni se pudo guardar ni comprobar
     throw new Error(`se guardo, pero no se pudo releer la hoja para confirmarlo: ${e.message}`);
@@ -173,6 +181,9 @@ export async function guardarFilaVerificada({ fila, valores, dni, codigos, datos
 
   const diferencias = diferenciasFila(valores, leido.valores, codigos, Object.keys(datos));
   if (errorGuardado && diferencias.length) throw errorGuardado; // no se guardo
+  // lo releido es la version confirmada: con eso se parchea lo compartido y
+  // las demas pestanas quedan al dia sin volver a bajar el listado
+  anotarPersona({ dni, fila: leido.fila, valores: leido.valores });
   return {
     fila: Number(fila),
     valores: copiarFila(leido.valores),
@@ -416,6 +427,10 @@ export async function altaPersona(datos, ctx, { log = () => {}, senal, tipos = n
     return { estado: "existe", ...alta };
   }
   log(`alta creada con codigo ${alta.codigo} (fila ${alta.fila})`, "ok");
+  // la persona nueva entra ya en el listado compartido: ESTADO RRCC y ESTADO
+  // TOTAL la ven sin recargar, aunque la renovacion que sigue todavia no haya
+  // terminado de ponerle fechas
+  anotarPersona({ dni: datos.dni, fila: alta.fila, valores: alta.valores || fila });
 
   return renovarPersona(datos.dni, ctx, { log, senal });
 }

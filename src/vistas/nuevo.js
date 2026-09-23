@@ -12,13 +12,13 @@
 import { $, crearConsola, crearProgreso, notificar } from "./comun.js";
 import { normalizarDni } from "../lib/dni.js";
 import { aFormatoCorto } from "../../shared/estados.js";
-import { sheets } from "../lib/api.js";
-import { cargarContexto, altaPersona, generarSalidas, subirFoto } from "../lib/renovacion.js";
+import { obtenerContexto, obtenerPersona } from "../lib/datos.js";
+import { altaPersona, generarSalidas, subirFoto } from "../lib/renovacion.js";
 import { tiposDeMatriz, cargoMasParecido } from "../../shared/estados.js";
 import { RRCC } from "../../shared/rrcc.js";
 import { autocompletar } from "./autocompletar.js";
 
-export function montarNuevo({ obtenerContexto } = {}) {
+export function montarNuevo() {
   const consola = crearConsola("nv-term", "nv-log-clear");
   const barra = crearProgreso("nv");
 
@@ -194,7 +194,7 @@ export function montarNuevo({ obtenerContexto } = {}) {
     }
 
     try {
-      const r = await sheets({ accion: "persona", dni: norm.dni });
+      const r = await obtenerPersona(norm.dni);
       if (!r.encontrada) {
         el.existe.hidden = true;
         consola(`${norm.dni} no está en la base: se puede dar de alta`, "ok");
@@ -250,7 +250,10 @@ export function montarNuevo({ obtenerContexto } = {}) {
   // Google Sheets tarda varios segundos en contestar y hasta entonces el
   // desplegable estaba vacio. La ultima lista se guarda en el navegador para
   // que salga al instante y se refresque por detras.
-  const CATALOGO_GUARDADO = "rrcc.catalogo";
+  // Clave propia: estos cargos/areas salen de MATRIZ_PUESTO (los puestos que
+  // la matriz reconoce), no de los que ya existen en `BD AESA`. Compartir la
+  // clave con esos ultimos hacia que cada pestana pisara la lista de la otra.
+  const CATALOGO_GUARDADO = "rrcc.catalogo.matriz";
 
   function catalogoGuardado() {
     try {
@@ -297,7 +300,7 @@ export function montarNuevo({ obtenerContexto } = {}) {
     }
 
     const matriz = (async () => {
-      contexto = (await obtenerContexto?.()) || (await cargarContexto());
+      contexto = await obtenerContexto();
       const cargos = cargosDeMatriz(contexto?.matriz || []);
       const areas = areasDeMatriz(contexto?.matriz || []);
       const siguiente = { cargos, areas };
@@ -366,7 +369,7 @@ export function montarNuevo({ obtenerContexto } = {}) {
     if (datos.relleno) consola(`documento rellenado a 8 dígitos: ${el.dni.value} → ${datos.dni}`, "warn");
 
     try {
-      if (!contexto) contexto = await cargarContexto();
+      if (!contexto) contexto = await obtenerContexto();
 
       /* la foto es obligatoria y se sube antes de crear la fila: si falla no
          queda un registro sin foto */

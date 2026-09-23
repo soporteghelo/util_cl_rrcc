@@ -16,20 +16,47 @@ const INTENTOS = 3;
  */
 const espera = (intento) => Number(process.env.APPS_SCRIPT_REINTENTO_MS ?? 1200) * intento * (0.5 + Math.random());
 
+/**
+ * Tiempo total que este puente puede gastar antes de rendirse con su propio
+ * mensaje. Tiene que quedar POR DEBAJO del `maxDuration` de la funcion (60 s
+ * en vercel.json).
+ *
+ * Si se pasa, quien corta es la red de Vercel, y su 504 no es JSON sino una
+ * pagina HTML: el navegador solo puede decir "respuesta ilegible (HTTP 504)",
+ * sin ninguna pista de que lo que hubo fue una demora. Cortando aca se
+ * responde JSON con un mensaje entendible y HTTP 502, que la vista ya sabe
+ * reintentar.
+ */
+const presupuesto = () => Number(process.env.APPS_SCRIPT_PRESUPUESTO_MS ?? 50000);
+
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Una peticion: { r, texto, datos } con `datos` = null si la respuesta no era JSON. */
-async function unaPeticion(url, cuerpo) {
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(cuerpo),
-  });
-  const texto = await r.text();
+/**
+ * Una peticion con tope de tiempo: { r, texto, datos, ms }.
+ *  - `datos` es null si la respuesta no era JSON;
+ *  - `r` es null si no hubo respuesta (se agoto el tiempo, o fallo la red);
+ *  - `ms` es lo que tardo, para saber si queda presupuesto para otro intento.
+ */
+async function unaPeticion(url, cuerpo, ms) {
+  const empezo = Date.now();
   try {
-    return { r, texto, datos: JSON.parse(texto.replace(/^﻿/, "").trim()) };
-  } catch {
-    return { r, texto, datos: null };
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(cuerpo),
+      signal: AbortSignal.timeout(ms),
+    });
+    const texto = await r.text();
+    try {
+      return { r, texto, datos: JSON.parse(texto.replace(/^\uFEFF/, "").trim()), ms: Date.now() - empezo };
+    } catch {
+      return { r, texto, datos: null, ms: Date.now() - empezo };
+    }
+  } catch (fallo) {
+    // Sin respuesta: la ejecucion en Google pudo haber ocurrido igual, asi que
+    // cuenta como una respuesta rota mas (se reintenta, y el error final queda
+    // marcado como ambiguo).
+    return { r: null, texto: "", datos: null, ms: Date.now() - empezo, fallo };
   }
 }
 
@@ -67,6 +94,15 @@ function mensajeDePagina(r, texto) {
   );
 }
 
+/** Mensaje legible del ultimo intento fallido, haya traido pagina o nada. */
+function mensajeDeFallo({ r, texto, fallo }, quien) {
+  if (r) return mensajeDePagina(r, texto);
+  if (fallo?.name === "TimeoutError" || fallo?.name === "AbortError") {
+    return `Apps Script no respondió a tiempo a "${quien}" (${Math.round(presupuesto() / 1000)} s): la hoja está lenta o el script arrancando en frío; vuelve a intentarlo en unos segundos`;
+  }
+  return `no se pudo hablar con Apps Script: ${fallo?.message || fallo}`;
+}
+
 /**
  * Cuando el script tarda (arranque en frio, o la hoja recalculando), Google
  * entrega la respuesta rota: una pagina 404 "No se encontro la pagina Drive"
@@ -83,20 +119,28 @@ export async function pedirAppsScript(servicio, cuerpo) {
   const url = appsScriptUrl();
   if (!url) throw new Error("Apps Script no esta configurado: define APPS_SCRIPT_URL");
   const envio = { servicio, ...cuerpo, token: process.env.APPS_SCRIPT_TOKEN || "" };
+  const quien = `${servicio}:${cuerpo?.accion || ""}`;
+  const vence = Date.now() + presupuesto();
 
   let ultima = null;
   for (let intento = 1; intento <= INTENTOS; intento++) {
-    ultima = await unaPeticion(url, envio);
+    ultima = await unaPeticion(url, envio, Math.max(vence - Date.now(), 1));
     if (ultima.datos && !esRespuestaFantasma(ultima.datos)) break;
-    if (intento < INTENTOS) await dormir(espera(intento));
+    if (intento === INTENTOS) break;
+    // Empezar un intento que no cabe en el presupuesto solo asegura el 504 de
+    // Vercel: si no entran la pausa mas otro intento como el que acaba de
+    // fallar, mejor rendirse ahora y responder con un mensaje legible.
+    const pausa = espera(intento);
+    if (vence - Date.now() < pausa + ultima.ms) break;
+    await dormir(pausa);
   }
 
-  const { r, texto, datos } = ultima;
+  const { r, datos } = ultima;
   if (!datos || esRespuestaFantasma(datos)) {
     const e = new Error(
       datos
-        ? `Apps Script devolvió el "hello" de doGet en vez de la respuesta de "${servicio}:${cuerpo?.accion || ""}" (pedidos simultaneos saturando el Web App)`
-        : mensajeDePagina(r, texto)
+        ? `Apps Script devolvió el "hello" de doGet en vez de la respuesta de "${quien}" (pedidos simultaneos saturando el Web App)`
+        : mensajeDeFallo(ultima, quien)
     );
     e.ambiguo = true; // la ejecucion pudo haber ocurrido: quien escribe debe verificarlo
     throw e;

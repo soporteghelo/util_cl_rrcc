@@ -16,8 +16,17 @@ import {
   escaparHtml,
   conReintento,
   descargarBlob,
+  hace,
+  alMostrarse,
 } from "./comun.js";
-import { cargarContexto, listarPersonal } from "../lib/renovacion.js";
+import {
+  obtenerContexto,
+  obtenerPersonal,
+  personalEnMemoria,
+  personalGuardado,
+  edadPersonal,
+  alCambiar,
+} from "../lib/datos.js";
 import { armarXlsx } from "../lib/excel.js";
 import { personasPorRiesgo, aFormatoCorto, aIso, hoyIso } from "../../shared/estados.js";
 import { RRCC } from "../../shared/rrcc.js";
@@ -58,29 +67,6 @@ const COLUMNAS_EXCEL = [
   { titulo: "AREA", ancho: 26, valor: (it) => (it.persona.area || "").toUpperCase() },
 ];
 
-const CLAVE_CACHE = "rrcc.estado.snapshot";
-
-/** Ultima lista de personas traida con exito, para pintarla al instante la
-    proxima vez mientras se trae la real: leer 600+ personas de Apps Script
-    tarda varios segundos, y sin esto la pantalla se queda en blanco todo
-    ese tiempo aunque no haya cambiado casi nada desde la ultima carga. */
-function leerSnapshot() {
-  try {
-    const datos = JSON.parse(localStorage.getItem(CLAVE_CACHE));
-    return Array.isArray(datos?.personas) ? datos : null;
-  } catch {
-    return null; // cache invalido o sin almacenamiento: se ignora
-  }
-}
-
-function guardarSnapshot(config, personas) {
-  try {
-    localStorage.setItem(CLAVE_CACHE, JSON.stringify({ config: config || {}, personas }));
-  } catch {
-    /* localStorage lleno o no disponible: no es critico, solo se pierde el atajo */
-  }
-}
-
 export function montarEstado() {
   const consola = crearConsola("es-term", "es-log-clear");
 
@@ -96,6 +82,7 @@ export function montarEstado() {
     resCount: $("es-res-count"),
     resultados: $("es-resultados"),
     resumenRiesgo: $("es-resumen-riesgo"),
+    recargar: $("es-recargar"),
   };
 
   let personas = [];
@@ -284,41 +271,79 @@ export function montarEstado() {
     }
   }
 
-  async function cargar() {
+  /** Deja la vista mostrando `lista` sin pedirle nada a la hoja. Es el camino
+      por el que entra todo lo que ya cargo otra pestana, lo guardado de la
+      sesion anterior y los parches de cada guardado. */
+  function adoptar(lista, nota = "") {
+    personas = lista;
+    el.count.textContent = `${personas.length} persona(s)${nota ? ` (${nota})` : ""}`;
+    el.recargar.hidden = personas.length === 0;
+    pintarCuandoSeVea();
+  }
+
+  /** La precarga del arranque puede traer datos con esta pestana sin abrir:
+      armar la tabla entonces es trabajo tirado, asi que se deja apuntado y se
+      pinta al mostrarse. */
+  let pintadoPendiente = false;
+  function pintarCuandoSeVea() {
+    if ($("vista-estado").hidden) {
+      pintadoPendiente = true;
+      return;
+    }
+    pintadoPendiente = false;
+    pintar();
+  }
+  alMostrarse("vista-estado", () => {
+    if (!pintadoPendiente) return;
+    pintadoPendiente = false;
+    pintar();
+  });
+
+  /**
+   * Trae el personal, reutilizando lo que ya haya.
+   *
+   * Orden de preferencia: lo que cargo otra pestana en esta sesion (instantaneo
+   * y sin red), lo guardado de la ultima vez (instantaneo, mientras llega lo
+   * real) y por ultimo la hoja. Con `refrescar` se salta todo eso y se le
+   * pregunta a la hoja de nuevo, que es lo que hace el enlace "recargar".
+   */
+  async function cargar({ refrescar = false } = {}) {
     if (cargando) return;
     cargando = true;
     el.cargar.disabled = true;
     consola.limpiar();
-    consola.cabecera("CARGANDO PERSONAL");
+    consola.cabecera(refrescar ? "RECARGANDO PERSONAL" : "CARGANDO PERSONAL");
     ordenPorGrupo.clear();
 
-    // Antes de esperar a Apps Script, pinta al instante lo que se trajo la
-    // ultima vez (queda guardado en este navegador): con 600+ personas la
-    // carga real tarda varios segundos, y asi la pantalla no se queda en
-    // blanco todo ese tiempo. Se repinta solo con lo real en cuanto llega.
-    if (!personas.length) {
-      const snap = leerSnapshot();
-      if (snap) {
-        configSnapshot = snap.config;
-        personas = snap.personas;
-        el.count.textContent = `${personas.length} persona(s) (de la última carga, actualizando…)`;
-        pintar();
-        consola(`${personas.length} persona(s) de la última carga guardada; trayendo datos actuales…`, "info");
+    if (!refrescar) {
+      const compartido = personalEnMemoria();
+      if (compartido) {
+        adoptar(compartido, hace(edadPersonal()));
+        consola(`${compartido.length} persona(s) ya cargadas ${hace(edadPersonal())}; usa "recargar" para traerlas de nuevo`, "ok");
+      } else if (!personas.length) {
+        // con 600+ personas la carga real tarda varios segundos: mientras
+        // tanto se pinta lo de la ultima vez para no dejar la pantalla vacia
+        const snap = personalGuardado();
+        if (snap) {
+          configSnapshot = snap.config;
+          adoptar(snap.personas, "de la última carga, actualizando…");
+          consola(`${snap.personas.length} persona(s) de la última carga guardada; trayendo datos actuales…`, "info");
+        }
       }
     }
 
     try {
       const [ctx, lista] = await conReintento(
-        () => Promise.all([contexto ? Promise.resolve(contexto) : cargarContexto(), listarPersonal()]),
+        () => Promise.all([obtenerContexto({ refrescar }), obtenerPersonal({ refrescar })]),
         consola
       );
       contexto = ctx;
-      personas = lista;
-      guardarSnapshot(ctx.config, lista);
-      el.count.textContent = `${personas.length} persona(s)`;
-      consola(`${personas.length} persona(s) leída(s) de la hoja`, "ok");
-      pintar();
-      notificar("Personal cargado", `${personas.length} persona(s) listas para el reporte de vencimientos.`);
+      const deLaHoja = lista !== personas;
+      adoptar(lista);
+      if (deLaHoja) {
+        consola(`${personas.length} persona(s) leída(s) de la hoja`, "ok");
+        notificar("Personal cargado", `${personas.length} persona(s) listas para el reporte de vencimientos.`);
+      }
     } catch (e) {
       consola(`no se pudo cargar: ${e.message}`, "err");
       notificar("No se pudo cargar", e.message, "warn");
@@ -327,6 +352,24 @@ export function montarEstado() {
       el.cargar.disabled = false;
     }
   }
+
+  /**
+   * Lo que cargue o guarde cualquier otra pestana llega por aca y se pinta
+   * solo: renovar a alguien en RENOVACION se ve al instante en este reporte.
+   *
+   * Solo se adoptan listados COMPLETOS: el que usa ESTADO TOTAL viene filtrado
+   * a los vencidos activos y aqui haria creer que la empresa tiene 30 personas.
+   */
+  alCambiar((ev) => {
+    if (ev.tipo !== "personal" || !ev.completo || ev.personas === personas || cargando) return;
+    adoptar(ev.personas, ev.origen === "escritura" ? "actualizado" : hace(edadPersonal()));
+    consola(
+      ev.origen === "escritura"
+        ? "una fila se guardó en otra pestaña: reporte actualizado"
+        : `${ev.personas.length} persona(s) ya disponibles: la base se cargó una vez para toda la app`,
+      "info"
+    );
+  });
 
   /** Clic (o Enter/Espacio) en un <th data-campo>: ordena ese grupo por esa
       columna, alternando ascendente/descendente; un clic en otra columna
@@ -353,7 +396,8 @@ export function montarEstado() {
     ordenarPorEncabezado(th);
   });
 
-  el.cargar.addEventListener("click", cargar);
+  el.cargar.addEventListener("click", () => cargar());
+  el.recargar.addEventListener("click", () => cargar({ refrescar: true }));
   el.buscar.addEventListener("input", pintar);
   el.hasta.addEventListener("input", pintar);
   el.hasta.addEventListener("change", pintar);
@@ -373,7 +417,13 @@ export function montarEstado() {
   el.imprimir.addEventListener("click", () => window.print());
   el.excel.addEventListener("click", exportar);
 
-  pintar();
+  // Al montarse ya puede haber datos: otra pestana que cargo antes, o la
+  // sesion anterior guardada en este navegador. Se pintan sin esperar a que
+  // alguien pulse CARGAR PERSONAL.
+  const yaHay = personalEnMemoria();
+  if (yaHay) adoptar(yaHay, hace(edadPersonal()));
 
-  return { recargar: cargar };
+  pintarCuandoSeVea();
+
+  return { recargar: () => cargar({ refrescar: true }), cargar };
 }

@@ -8,9 +8,109 @@
  * JOMISER/EIN/Drive.
  */
 
-import { $, crearConsola, notificar, escaparHtml, textoDias, conReintento } from "./comun.js";
-import { cargarContexto, listarPersonal } from "../lib/renovacion.js";
-import { riesgosProblemaDe, aFormatoCorto } from "../../shared/estados.js";
+import {
+  $,
+  crearConsola,
+  notificar,
+  escaparHtml,
+  textoDias,
+  conReintento,
+  descargarBlob,
+  hace,
+  alMostrarse,
+} from "./comun.js";
+import {
+  obtenerContexto,
+  obtenerPersonal,
+  personalEnMemoria,
+  edadPersonal,
+  alCambiar,
+} from "../lib/datos.js";
+import { armarXlsx } from "../lib/excel.js";
+import { armarPdf, COLOR } from "../lib/pdf.js";
+import { armarPngTabla, TINTA } from "../lib/imagen.js";
+import { riesgosProblemaDe, aFormatoCorto, hoyIso } from "../../shared/estados.js";
+import { porCodigo } from "../../shared/rrcc.js";
+
+/**
+ * Los vencidos de una persona van siempre repartidos en dos bloques: primero
+ * las AUTORIZACIONES (tipo A, las que respalda un certificado y son las que
+ * sacan a alguien de operacion) y despues las CAPACITACIONES (tipo C). Una
+ * fila sin tipo no se descarta: se muestra aparte para que se vea que esta
+ * mal puesta en la hoja.
+ */
+const TIPOS = [
+  { tipo: "A", rotulo: "A · AUTORIZACIONES VENCIDAS" },
+  { tipo: "C", rotulo: "C · CAPACITACIONES VENCIDAS" },
+  { tipo: "", rotulo: "SIN TIPO EN LA HOJA" },
+];
+
+const TITULO_INFORME = "ESTADO TOTAL · RRCC VENCIDOS POR PERSONA";
+
+const tipoDe = (riesgo) => (riesgo.tipo === "A" || riesgo.tipo === "C" ? riesgo.tipo : "");
+
+/** Mismo codigo de color en la vista previa (CSS) y en el PDF. */
+const COLOR_TIPO = { A: COLOR.rojo, C: COLOR.ambar, "": COLOR.gris };
+
+/** El nombre largo del RRCC sale del catalogo: la hoja en vivo devuelve el codigo. */
+const nombreRiesgo = (riesgo) => porCodigo(riesgo.codigo)?.nombre || riesgo.nombre || riesgo.codigo;
+
+/** Vencidos agrupados por tipo, cada grupo de lo mas vencido a lo menos. */
+function vencidosPorTipo(vencidos) {
+  return TIPOS.map((t) => ({
+    ...t,
+    items: vencidos.filter((r) => tipoDe(r) === t.tipo).sort((a, b) => (a.venc < b.venc ? -1 : a.venc > b.venc ? 1 : 0)),
+  })).filter((g) => g.items.length);
+}
+
+/**
+ * Las mismas columnas de la tabla de pantalla, en el mismo orden. Los anchos
+ * son pixeles y se reparten tal cual: el DNI y los contadores son de tamano
+ * fijo, y lo que puede crecer (nombre, cargo) se lleva el resto.
+ */
+const COLUMNAS_IMAGEN = [
+  { titulo: "DNI", ancho: 92, valor: (f) => f.persona.dni || "—" },
+  { titulo: "Apellidos y nombres", ancho: 295, valor: (f) => (f.persona.nombreCompleto || "—").toUpperCase() },
+  {
+    titulo: "Cargo / Área",
+    ancho: 340,
+    valor: (f) => [f.persona.cargo, f.persona.area].filter(Boolean).join(" · ").toUpperCase() || "—",
+  },
+  { titulo: "Vencidos", ancho: 95, valor: (f) => f.vencidos.length, pastilla: () => TINTA.rojo },
+  { titulo: "Por vencer", ancho: 105, valor: (f) => f.porVencer.length, pastilla: () => TINTA.ambar },
+  {
+    titulo: "Días",
+    ancho: 200,
+    valor: (f) => textoDias(Number(f.persona.dias)),
+    // los que ya vencieron, en rojo: es lo primero que se busca en la imagen
+    color: (f) => (Number(f.persona.dias) < 0 ? TINTA.rojo : TINTA.tinta),
+  },
+];
+
+const COLUMNAS_DETALLE = [
+  { titulo: "APELLIDOS Y NOMBRES", ancho: 34 },
+  { titulo: "DNI", ancho: 12 },
+  { titulo: "CARGO", ancho: 30 },
+  { titulo: "AREA", ancho: 26 },
+  { titulo: "TIPO", ancho: 7 },
+  { titulo: "RRCC", ancho: 7 },
+  { titulo: "RIESGO CRITICO", ancho: 32 },
+  { titulo: "F. VENCIMIENTO", ancho: 16, tipo: "fecha" },
+  { titulo: "DIAS", ancho: 8, tipo: "numero" },
+];
+
+const COLUMNAS_RESUMEN = [
+  { titulo: "APELLIDOS Y NOMBRES", ancho: 34 },
+  { titulo: "DNI", ancho: 12 },
+  { titulo: "CARGO", ancho: 30 },
+  { titulo: "AREA", ancho: 26 },
+  { titulo: "AUTORIZACIONES (A)", ancho: 18, tipo: "numero" },
+  { titulo: "RRCC TIPO A", ancho: 30 },
+  { titulo: "CAPACITACIONES (C)", ancho: 18, tipo: "numero" },
+  { titulo: "RRCC TIPO C", ancho: 30 },
+  { titulo: "TOTAL VENCIDOS", ancho: 15, tipo: "numero" },
+  { titulo: "POR VENCER", ancho: 12, tipo: "numero" },
+];
 
 export function montarEstadoTotal() {
   const consola = crearConsola("et-term", "et-log-clear");
@@ -19,6 +119,14 @@ export function montarEstadoTotal() {
     buscar: $("et-buscar"),
     orden: $("et-orden"),
     cargar: $("et-cargar"),
+    previaModal: $("et-previa-modal"),
+    previaCuerpo: $("et-previa-cuerpo"),
+    previaCount: $("et-previa-count"),
+    previaCerrar: $("et-previa-cerrar"),
+    previaImprimir: $("et-previa-imprimir"),
+    previaDescargar: $("et-previa-descargar"),
+    pdf: $("et-pdf"),
+    excel: $("et-excel"),
     count: $("et-count"),
     resCount: $("et-res-count"),
     dash: $("et-dash"),
@@ -26,6 +134,8 @@ export function montarEstadoTotal() {
     dashVencidos: $("et-dash-vencidos"),
     dashPorVencer: $("et-dash-porvencer"),
     resultados: $("et-resultados"),
+    recargar: $("et-recargar"),
+    imagen: $("et-imagen"),
   };
 
   let personas = [];
@@ -138,6 +248,83 @@ export function montarEstadoTotal() {
   }
 
   /* ------------------------------------------------------------------ */
+  /* Informe (vista previa de lo que se imprime y se exporta)            */
+  /* ------------------------------------------------------------------ */
+
+  const CLASE_TIPO = { A: "et-inf-a", C: "et-inf-c", "": "et-inf-x" };
+
+  /**
+   * El informe que se ve en pantalla es EL MISMO que sale por la impresora y
+   * el que se vuelca al PDF: misma gente, mismo orden (por apellidos) y mismos
+   * grupos A/C. Asi no hace falta imprimir para saber que va a salir.
+   */
+  function informeHtml(lista) {
+    return lista
+      .map(({ persona, vencidos, porVencer }, i) => {
+        const grupos = vencidosPorTipo(vencidos)
+          .map(
+            (g) =>
+              `<div class="et-inf-grupo ${CLASE_TIPO[g.tipo] || "et-inf-x"}">` +
+              `<b>${g.rotulo} (${g.items.length})</b>` +
+              `<table><tbody>` +
+              g.items
+                .map(
+                  (r) =>
+                    `<tr><td class="et-inf-cod">${escaparHtml(r.codigo)}</td>` +
+                    `<td>${escaparHtml(nombreRiesgo(r))}</td>` +
+                    `<td class="et-inf-fecha">${aFormatoCorto(r.venc) || "—"}</td>` +
+                    `<td class="et-inf-dias">${escaparHtml(textoDias(r.dias))}</td></tr>`
+                )
+                .join("") +
+              `</tbody></table></div>`
+          )
+          .join("");
+
+        return (
+          `<article class="et-inf-persona">` +
+          `<header><b><span class="et-inf-n">${i + 1}.</span>${escaparHtml(persona.nombreCompleto) || "—"}</b>` +
+          `<span>DNI ${escaparHtml(persona.dni) || "—"}</span></header>` +
+          `<div class="et-inf-sub">${escaparHtml(cargoArea(persona)) || "sin cargo ni área"} · ` +
+          `${vencidos.length} vencido(s) · ${porVencer.length} por vencer</div>` +
+          (grupos || `<div class="et-inf-vacio">sin RRCC vencidos</div>`) +
+          `</article>`
+        );
+      })
+      .join("");
+  }
+
+  /**
+   * El informe no entra en la vista (ahi manda la tabla resumen): se enseña en
+   * un flotante antes de bajar el PDF, para no tener que abrir el archivo solo
+   * para comprobar que sale lo que se espera. Desde ahi se descarga o se
+   * imprime, y lo impreso es exactamente esto.
+   */
+  function abrirPrevia() {
+    const lista = porApellidos();
+    if (!lista.length) return;
+    // el encabezado solo se ve al imprimir (en pantalla ya esta el del
+    // flotante), y dice lo mismo que la cabecera del PDF
+    el.previaCuerpo.innerHTML =
+      `<div class="et-inf-cabecera"><b>${TITULO_INFORME}</b>` +
+      `<span>${escaparHtml(subtituloInforme(lista))}</span></div>` +
+      informeHtml(lista);
+    el.previaCount.textContent = `${lista.length} persona(s) · ordenado por apellidos`;
+    el.previaModal.hidden = false;
+    el.previaCuerpo.scrollTop = 0;
+    document.addEventListener("keydown", alEscapePrevia, true);
+  }
+
+  function cerrarPrevia() {
+    el.previaModal.hidden = true;
+    el.previaCuerpo.innerHTML = "";
+    document.removeEventListener("keydown", alEscapePrevia, true);
+  }
+
+  function alEscapePrevia(ev) {
+    if (ev.key === "Escape") cerrarPrevia();
+  }
+
+  /* ------------------------------------------------------------------ */
   /* Tabla + dashboard                                                   */
   /* ------------------------------------------------------------------ */
 
@@ -156,6 +343,7 @@ export function montarEstadoTotal() {
 
   function pintar() {
     cerrarFlotante();
+    if (!el.previaModal.hidden) cerrarPrevia(); // lo que se veia ya no coincide con el filtro
     const textoFiltro = el.buscar.value.trim().toUpperCase();
     const normalizar = (valor) => String(valor ?? "").trim().toUpperCase();
     const umbrales = {
@@ -178,13 +366,15 @@ export function montarEstadoTotal() {
       return descendente ? db - da : da - db;
     });
 
-    el.resultados.innerHTML = filas.length
-      ? `<table class="estado-tabla et-tabla"><thead><tr>` +
+    const vacio = `<div class="estado-vacio">${
+      personas.length ? "nadie coincide con el filtro" : "carga el personal para ver el estado total"
+    }</div>`;
+
+    el.resultados.innerHTML = !filas.length
+      ? vacio
+      : `<table class="estado-tabla et-tabla"><thead><tr>` +
         `<th>DNI</th><th>Nombre</th><th>Cargo / Área</th><th>Vencidos</th><th>Por vencer</th><th>Días</th>` +
-        `</tr></thead><tbody>${filas.map(filaHtml).join("")}</tbody></table>`
-      : `<div class="estado-vacio">${
-          personas.length ? "nadie coincide con el filtro" : "carga el personal para ver el estado total"
-        }</div>`;
+        `</tr></thead><tbody>${filas.map(filaHtml).join("")}</tbody></table>`;
 
     const totalVencidos = filas.reduce((n, f) => n + f.vencidos.length, 0);
     const totalPorVencer = filas.reduce((n, f) => n + f.porVencer.length, 0);
@@ -194,29 +384,263 @@ export function montarEstadoTotal() {
     el.dashPorVencer.textContent = String(totalPorVencer);
 
     el.resCount.textContent = personas.length ? `${filas.length} persona(s) vencida(s)` : "";
+    el.pdf.disabled = filas.length === 0;
+    el.excel.disabled = filas.length === 0;
+    el.imagen.disabled = filas.length === 0;
   }
 
-  async function cargar() {
+  /* ------------------------------------------------------------------ */
+  /* Exportacion (PDF y Excel)                                           */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Lo mismo que se ve en pantalla (mismos filtros), pero ordenado por
+   * apellidos: en pantalla manda la urgencia, y para repartir el informe
+   * manda el orden alfabetico.
+   */
+  const porApellidos = () =>
+    [...filas].sort((a, b) =>
+      String(a.persona.nombreCompleto || a.persona.dni || "").localeCompare(
+        String(b.persona.nombreCompleto || b.persona.dni || ""),
+        "es"
+      )
+    );
+
+  const cargoArea = (p) => [p.cargo, p.area].filter(Boolean).join(" · ");
+
+  /** Texto del encabezado del informe, con el filtro puesto si lo hay. */
+  function subtituloInforme(lista) {
+    const filtro = el.buscar.value.trim();
+    return (
+      `${lista.length} persona(s) activa(s) con al menos un RRCC vencido · ` +
+      `ordenado por apellidos · ${aFormatoCorto(hoyIso())}` +
+      (filtro ? ` · filtro: ${filtro.toUpperCase()}` : "")
+    );
+  }
+
+  async function exportarPdf() {
+    const lista = porApellidos();
+    if (!lista.length) return;
+
+    const bloques = lista.map(({ persona, vencidos, porVencer }, i) => {
+      const partes = [
+        {
+          tipo: "cabecera",
+          indice: i + 1,
+          texto: persona.nombreCompleto || "—",
+          derecha: `DNI ${persona.dni || "—"}`,
+        },
+        {
+          tipo: "nota",
+          texto:
+            (cargoArea(persona) || "sin cargo ni área") +
+            ` · ${vencidos.length} vencido(s) · ${porVencer.length} por vencer`,
+        },
+      ];
+      for (const grupo of vencidosPorTipo(vencidos)) {
+        partes.push({
+          tipo: "grupo",
+          texto: `${grupo.rotulo} (${grupo.items.length})`,
+          color: COLOR_TIPO[grupo.tipo] || COLOR.gris,
+        });
+        // fondo alterno: con ocho o diez vencimientos seguidos, la vista se
+        // pierde de columna a columna sin una guia
+        grupo.items.forEach((r, n) => {
+          partes.push({
+            tipo: "item",
+            fondo: n % 2 === 1,
+            cols: [
+              { texto: r.codigo, x: 18, ancho: 34, negrita: true },
+              { texto: nombreRiesgo(r), x: 56, ancho: 230 },
+              { texto: aFormatoCorto(r.venc) || "—", x: 292, ancho: 72 },
+              { texto: textoDias(r.dias), x: 370, ancho: 145, color: COLOR.gris },
+            ],
+          });
+        });
+      }
+      if (!vencidos.length) partes.push({ tipo: "nota", texto: "sin RRCC vencidos" });
+      partes.push({ tipo: "espacio", alto: 6 });
+      return partes;
+    });
+
+    const nombre = `ESTADO TOTAL ${hoyIso()}.pdf`;
+    el.pdf.disabled = true;
+    try {
+      descargarBlob(
+        await armarPdf({
+          titulo: TITULO_INFORME,
+          subtitulo: subtituloInforme(lista),
+          bloques,
+        }),
+        nombre
+      );
+      consola(`${lista.length} persona(s) exportadas a ${nombre}`, "ok");
+    } catch (e) {
+      consola(`no se pudo exportar el PDF: ${e.message}`, "err");
+      notificar("No se pudo exportar", e.message, "warn");
+    } finally {
+      el.pdf.disabled = filas.length === 0;
+    }
+  }
+
+  async function exportarExcel() {
+    const lista = porApellidos();
+    if (!lista.length) return;
+
+    // una fila por RRCC vencido, con el tipo delante para poder agrupar en Excel
+    const detalle = lista.flatMap(({ persona, vencidos }) =>
+      vencidosPorTipo(vencidos).flatMap((grupo) =>
+        grupo.items.map((r) => [
+          persona.nombreCompleto || "",
+          persona.dni || "",
+          (persona.cargo || "").toUpperCase(),
+          (persona.area || "").toUpperCase(),
+          grupo.tipo || "?",
+          r.codigo,
+          nombreRiesgo(r),
+          r.venc || "",
+          r.dias === null ? "" : r.dias,
+        ])
+      )
+    );
+
+    // y una fila por persona, con sus RRCC vencidos ya separados en A y C
+    const codigos = (vencidos, tipo) =>
+      vencidos.filter((r) => tipoDe(r) === tipo).map((r) => r.codigo).join(", ");
+    const resumen = lista.map(({ persona, vencidos, porVencer }) => [
+      persona.nombreCompleto || "",
+      persona.dni || "",
+      (persona.cargo || "").toUpperCase(),
+      (persona.area || "").toUpperCase(),
+      vencidos.filter((r) => tipoDe(r) === "A").length,
+      codigos(vencidos, "A"),
+      vencidos.filter((r) => tipoDe(r) === "C").length,
+      codigos(vencidos, "C"),
+      vencidos.length,
+      porVencer.length,
+    ]);
+
+    const nombre = `ESTADO TOTAL ${hoyIso()}.xlsx`;
+    el.excel.disabled = true;
+    try {
+      descargarBlob(
+        await armarXlsx([
+          { nombre: "VENCIDOS POR PERSONA", columnas: COLUMNAS_DETALLE, filas: detalle },
+          { nombre: "RESUMEN", columnas: COLUMNAS_RESUMEN, filas: resumen },
+        ]),
+        nombre
+      );
+      consola(`${lista.length} persona(s) y ${detalle.length} vencimiento(s) exportados a ${nombre}`, "ok");
+    } catch (e) {
+      consola(`no se pudo exportar el Excel: ${e.message}`, "err");
+      notificar("No se pudo exportar", e.message, "warn");
+    } finally {
+      el.excel.disabled = filas.length === 0;
+    }
+  }
+
+  /** Deja la vista mostrando `lista` sin pedirle nada a la hoja: por aca entra
+      lo que ya cargo otra pestana y los parches de cada guardado. */
+  function adoptar(lista, nota = "") {
+    personas = lista;
+    el.count.textContent = `${personas.length} persona(s)${nota ? ` (${nota})` : ""}`;
+    el.recargar.hidden = personas.length === 0;
+    pintarCuandoSeVea();
+  }
+
+  /** La precarga del arranque puede traer datos con esta pestana sin abrir:
+      armar la tabla entonces es trabajo tirado, asi que se deja apuntado y se
+      pinta al mostrarse. */
+  let pintadoPendiente = false;
+  function pintarCuandoSeVea() {
+    if ($("vista-estado-total").hidden) {
+      pintadoPendiente = true;
+      return;
+    }
+    pintadoPendiente = false;
+    pintar();
+  }
+  alMostrarse("vista-estado-total", () => {
+    if (!pintadoPendiente) return;
+    pintadoPendiente = false;
+    pintar();
+  });
+
+  /**
+   * Trae al personal vencido y activo.
+   *
+   * Si ESTADO RRCC (u otra pestana) ya bajo el listado completo, el filtro sale
+   * de ahi sin tocar la red; si no, se lo pide al backend ya filtrado, que es
+   * lo que evita bajar 1.5 MB para mostrar unas pocas decenas de personas.
+   */
+  /**
+   * La tabla entera como PNG sobre fondo claro.
+   *
+   * Sale lo mismo que se esta viendo (mismo filtro, mismo orden) pero con
+   * TODAS las filas, no solo las que caben en el scroll, para poder pegarla en
+   * un mensaje sin adjuntar un archivo que haya que abrir.
+   */
+  async function exportarImagen() {
+    if (!filas.length) return;
+    const nombre = `ESTADO TOTAL ${hoyIso()}.png`;
+    el.imagen.disabled = true;
+    try {
+      const filtro = el.buscar.value.trim();
+      const png = await armarPngTabla({
+        titulo: TITULO_INFORME,
+        subtitulo:
+          `${filas.length} persona(s) con ESTADO_FINAL = VENCIDO y activas · al ${aFormatoCorto(hoyIso())}` +
+          (filtro ? ` · filtro "${filtro}"` : ""),
+        tarjetas: [
+          { numero: filas.length, rotulo: "personas vencidas" },
+          { numero: filas.reduce((n, f) => n + f.vencidos.length, 0), rotulo: "RRCC vencidos", color: TINTA.rojo },
+          { numero: filas.reduce((n, f) => n + f.porVencer.length, 0), rotulo: "RRCC por vencer", color: TINTA.ambar },
+        ],
+        columnas: COLUMNAS_IMAGEN,
+        filas,
+        pie: `AESA · U.M. Cerro Lindo · generado desde BD AESA el ${aFormatoCorto(hoyIso())}`,
+      });
+      descargarBlob(png, nombre);
+      consola(`${filas.length} persona(s) exportadas a ${nombre}`, "ok");
+    } catch (e) {
+      consola(`no se pudo generar la imagen: ${e.message}`, "err");
+      notificar("No se pudo generar la imagen", e.message, "warn");
+    } finally {
+      el.imagen.disabled = filas.length === 0;
+    }
+  }
+
+  async function cargar({ refrescar = false } = {}) {
     if (cargando) return;
     cargando = true;
     el.cargar.disabled = true;
     consola.limpiar();
-    consola.cabecera("CARGANDO PERSONAL");
+    consola.cabecera(refrescar ? "RECARGANDO PERSONAL" : "CARGANDO PERSONAL");
+
+    if (!refrescar) {
+      const compartido = personalEnMemoria("vencidos_activos");
+      if (compartido) {
+        adoptar(compartido, hace(edadPersonal()));
+        consola(`${compartido.length} persona(s) ya cargadas ${hace(edadPersonal())}; usa "recargar" para traerlas de nuevo`, "ok");
+      }
+    }
+
     try {
       const [ctx, lista] = await conReintento(
         () =>
           Promise.all([
-            contexto ? Promise.resolve(contexto) : cargarContexto(),
-            listarPersonal(undefined, "vencidos_activos"),
+            obtenerContexto({ refrescar }),
+            obtenerPersonal({ filtro: "vencidos_activos", refrescar }),
           ]),
         consola
       );
       contexto = ctx;
-      personas = lista;
-      el.count.textContent = `${personas.length} persona(s)`;
-      consola(`${personas.length} persona(s) leída(s) (filtrado en el backend cuando esta disponible)`, "ok");
-      pintar();
-      notificar("Personal cargado", `${personas.length} persona(s) listas para el estado total.`);
+      const deLaHoja = lista !== personas;
+      adoptar(lista);
+      if (deLaHoja) {
+        consola(`${personas.length} persona(s) leída(s) (filtrado en el backend cuando esta disponible)`, "ok");
+        notificar("Personal cargado", `${personas.length} persona(s) listas para el estado total.`);
+      }
     } catch (e) {
       consola(`no se pudo cargar: ${e.message}`, "err");
       notificar("No se pudo cargar", e.message, "warn");
@@ -226,7 +650,39 @@ export function montarEstadoTotal() {
     }
   }
 
-  el.cargar.addEventListener("click", cargar);
+  /**
+   * Lo que cargue o guarde otra pestana llega por aca y se pinta solo.
+   *
+   * Aqui se acepta cualquier listado, completo o filtrado: esta vista vuelve a
+   * filtrar por vencido+activo al pintar, asi que un listado ya filtrado no le
+   * hace dano.
+   */
+  alCambiar((ev) => {
+    if (ev.tipo !== "personal" || ev.personas === personas || cargando) return;
+    adoptar(ev.personas, ev.origen === "escritura" ? "actualizado" : hace(edadPersonal()));
+    consola(
+      ev.origen === "escritura"
+        ? "una fila se guardó en otra pestaña: informe actualizado"
+        : `${ev.personas.length} persona(s) ya disponibles: la base se cargó una vez para toda la app`,
+      "info"
+    );
+  });
+
+  el.cargar.addEventListener("click", () => cargar());
+  el.recargar.addEventListener("click", () => cargar({ refrescar: true }));
+  // el PDF pasa siempre por la vista previa: primero se ve, luego se baja
+  el.pdf.addEventListener("click", abrirPrevia);
+  el.previaCerrar.addEventListener("click", cerrarPrevia);
+  el.previaModal.addEventListener("click", (ev) => {
+    if (ev.target === el.previaModal) cerrarPrevia(); // clic fuera de la caja
+  });
+  el.previaImprimir.addEventListener("click", () => window.print());
+  el.previaDescargar.addEventListener("click", async () => {
+    await exportarPdf();
+    cerrarPrevia();
+  });
+  el.excel.addEventListener("click", exportarExcel);
+  el.imagen.addEventListener("click", exportarImagen);
   el.buscar.addEventListener("input", pintar);
   el.orden.addEventListener("click", () => {
     descendente = !descendente;
@@ -236,7 +692,12 @@ export function montarEstadoTotal() {
   el.resultados.addEventListener("click", alClicEnFila);
   el.resultados.addEventListener("keydown", alTecladoEnFila);
 
-  pintar();
+  // Al montarse ya puede haber datos de otra pestana: se pintan sin esperar a
+  // que alguien pulse CARGAR PERSONAL.
+  const yaHay = personalEnMemoria("vencidos_activos");
+  if (yaHay) adoptar(yaHay, hace(edadPersonal()));
 
-  return { recargar: cargar };
+  pintarCuandoSeVea();
+
+  return { recargar: () => cargar({ refrescar: true }), cargar };
 }

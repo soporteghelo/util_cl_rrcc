@@ -12,7 +12,8 @@ import JSZip from "jszip";
 import { $, crearConsola, crearProgreso, notificar, pedirPermisoAviso, copiarTexto } from "./comun.js";
 import { desdeTexto, normalizarLista } from "../lib/dni.js";
 import { extraerDocumentos } from "../lib/excel.js";
-import { sheets, drive, desdeBase64, descargar, blobABase64 } from "../lib/api.js";
+import { drive, desdeBase64, descargar, blobABase64 } from "../lib/api.js";
+import { obtenerCatalogo, catalogoGuardado } from "../lib/datos.js";
 import { cargarContexto, renovarPersona, consultarPersona, generarSalidas, resumenAutorizaciones, fotoDeDni, subirFoto, guardarFilaVerificada, MIME_DOCX } from "../lib/renovacion.js";
 import {
   aFormatoCorto,
@@ -757,24 +758,16 @@ export function montarRenovacion() {
     campo.addEventListener("blur", () => sincronizar(false));
   }
 
-  /** Areas conocidas (para el desplegable del campo AREA): las que ya guardo la pestana NUEVO PERSONAL, o las pide una vez. */
+  /** Areas conocidas (para el desplegable del campo AREA). Salen del almacen
+      compartido: del listado de personal si alguna pestana ya lo cargo, del
+      ultimo catalogo guardado si no, y solo en ultimo caso de la hoja. */
   let areasConocidas = [];
   async function cargarAreas() {
+    const guardado = catalogoGuardado();
+    if (Array.isArray(guardado?.areas)) areasConocidas = guardado.areas;
     try {
-      const guardado = JSON.parse(localStorage.getItem("rrcc.catalogo"));
-      if (Array.isArray(guardado?.areas)) areasConocidas = guardado.areas;
-    } catch {
-      /* sin almacenamiento solo se pierde el atajo */
-    }
-    if (areasConocidas.length) return;
-    try {
-      const catalogo = await sheets({ accion: "cargos" });
-      areasConocidas = catalogo.areas || [];
-      try {
-        localStorage.setItem("rrcc.catalogo", JSON.stringify(catalogo));
-      } catch {
-        /* idem */
-      }
+      const catalogo = await obtenerCatalogo();
+      areasConocidas = catalogo.areas || areasConocidas;
     } catch {
       /* el campo sigue funcionando a mano */
     }
@@ -1359,7 +1352,9 @@ export function montarRenovacion() {
     try {
       if (!contexto) {
         consola("cargando CONFIG y diccionario de cursos...");
-        contexto = await cargarContexto(senal);
+        // sin `senal`: el contexto lo comparten todas las pestanas, asi que
+        // cancelar esta corrida no puede tumbarle el pedido a las demas
+        contexto = await cargarContexto();
         consola(`${contexto.cursos.length} alias de curso, ${contexto.matriz.length} fila(s) de matriz`, "ok");
       }
 

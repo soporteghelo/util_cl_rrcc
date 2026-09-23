@@ -55,23 +55,54 @@ export async function descargar(cuerpo, senal) {
  * en vez de JSON). Por eso todo lo que hable con Apps Script se turna aca,
  * uno a la vez, sin importar desde que parte de la app se dispare.
  */
-let colaAppsScript = Promise.resolve();
-function unoALaVez(tarea) {
-  const turno = colaAppsScript.then(tarea, tarea);
-  colaAppsScript = turno.then(
-    () => {},
-    () => {}
-  ); // un pedido fallido no debe atascar la fila
-  return turno;
+/*
+ * La fila tiene dos carriles. En el normal va todo lo que el usuario acaba de
+ * pedir; en el de fondo, las precargas que la app dispara sola al abrirse (el
+ * listado de personal entero, que son ~1.5 MB y varios segundos). Mientras una
+ * precarga sigue ESPERANDO turno, cualquier pedido del usuario se le adelanta:
+ * sin esto, abrir la pagina y ponerse a renovar de inmediato significaria
+ * esperar a que termine de bajar una lista que nadie pidio todavia.
+ *
+ * Lo que ya esta en el aire no se adelanta ni se cancela: sigue siendo un
+ * pedido a la vez, que es lo que Apps Script aguanta.
+ */
+const pendientes = { normal: [], fondo: [] };
+let enCurso = false;
+
+function unoALaVez(tarea, fondo = false) {
+  return new Promise((listo, falla) => {
+    pendientes[fondo ? "fondo" : "normal"].push({ tarea, listo, falla });
+    bombear();
+  });
+}
+
+async function bombear() {
+  if (enCurso) return;
+  const siguiente = pendientes.normal.shift() || pendientes.fondo.shift();
+  if (!siguiente) return;
+
+  enCurso = true;
+  try {
+    siguiente.listo(await siguiente.tarea());
+  } catch (e) {
+    siguiente.falla(e); // un pedido fallido no debe atascar la fila
+  } finally {
+    enCurso = false;
+    bombear();
+  }
 }
 
 /* ------------------------------------------------------------------ */
 /* Base en Google Sheets                                               */
 /* ------------------------------------------------------------------ */
 
-/** Una accion de /api/sheets: contexto | persona | guardar | alta | cargos | setup. */
-export function sheets(cuerpo, senal) {
-  return unoALaVez(() => json("/api/sheets", cuerpo, senal));
+/**
+ * Una accion de /api/sheets: contexto | persona | guardar | alta | cargos | setup.
+ * `fondo: true` la manda por el carril de precarga, que cede el turno a todo
+ * lo que pida el usuario.
+ */
+export function sheets(cuerpo, senal, { fondo = false } = {}) {
+  return unoALaVez(() => json("/api/sheets", cuerpo, senal), fondo);
 }
 
 /* ------------------------------------------------------------------ */

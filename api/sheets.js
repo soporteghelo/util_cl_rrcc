@@ -115,14 +115,16 @@ async function accionPersona({ dni }) {
  */
 async function accionListado({ filtro } = {}) {
   const normalizar = (valor) => String(valor ?? "").trim().toUpperCase();
-  const valores = await leerTodoElPersonal();
-  let personas = valores.map((fila) => leerFila(fila));
+  let filas = await leerTodoElPersonal();
+  // Se filtra sobre la fila cruda, antes de `leerFila` (que arma los 18
+  // riesgos de cada persona), igual que en apps-script/Code.gs: asi el trabajo
+  // pesado se hace solo para quienes de verdad van a viajar en la respuesta.
   if (filtro === "vencidos_activos") {
-    personas = personas.filter(
-      (p) => normalizar(p.estadoFinal) === "VENCIDO" && normalizar(p.estadoTrabajador) === "ACTIVO"
+    filas = filas.filter(
+      (f) => normalizar(f[INDICE["ESTADO_FINAL"]]) === "VENCIDO" && normalizar(f[INDICE["_EstaTE"]]) === "ACTIVO"
     );
   }
-  return { personas };
+  return { personas: filas.map((fila) => leerFila(fila)) };
 }
 
 async function accionGuardar({ fila, valores, noMapeados, datos }) {

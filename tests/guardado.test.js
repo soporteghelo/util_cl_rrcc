@@ -117,6 +117,49 @@ test('Apps Script: si todos los intentos devuelven el "hello" de doGet, el error
   });
 });
 
+/* ---- presupuesto de tiempo del puente ---- */
+
+/** Un Apps Script que nunca contesta: se rinde solo cuando aborta la señal. */
+const nuncaContesta = (opciones) =>
+  new Promise((_, rechazar) => {
+    opciones.signal.addEventListener("abort", () => rechazar(opciones.signal.reason));
+  });
+
+test("Apps Script: si no contesta, el puente se rinde dentro de su presupuesto y no espera al corte de Vercel", async () => {
+  // Sin esto la funcion se pasa del maxDuration y quien responde es la red de
+  // Vercel, con un 504 en HTML: en pantalla queda "respuesta ilegible (HTTP 504)".
+  process.env.APPS_SCRIPT_PRESUPUESTO_MS = "150";
+  const empezo = Date.now();
+  let llamadas = 0;
+  try {
+    await conFetch(async (_url, opciones) => (llamadas++, nuncaContesta(opciones)), async () => {
+      await assert.rejects(pedirAppsScript("sheets", { accion: "listado" }), (e) => {
+        assert.equal(e.ambiguo, true, "pudo haberse ejecutado igual: quien escribe debe verificar");
+        assert.match(e.message, /no respondió a tiempo a "sheets:listado"/);
+        return true;
+      });
+    });
+  } finally {
+    delete process.env.APPS_SCRIPT_PRESUPUESTO_MS;
+  }
+  assert.equal(llamadas, 1, "no arranca un intento que ya no cabe en el presupuesto");
+  assert.ok(Date.now() - empezo < 1000, "se rinde en el presupuesto, no cuando lo corten desde afuera");
+});
+
+test("Apps Script: una demora que se come el presupuesto no impide aprovechar la respuesta que si llega", async () => {
+  process.env.APPS_SCRIPT_PRESUPUESTO_MS = "2000";
+  let llamadas = 0;
+  try {
+    await conFetch(async () => (llamadas++, respuesta({ ok: true, personas: [] })), async () => {
+      const r = await pedirAppsScript("sheets", { accion: "listado" });
+      assert.deepEqual(r.personas, []);
+    });
+  } finally {
+    delete process.env.APPS_SCRIPT_PRESUPUESTO_MS;
+  }
+  assert.equal(llamadas, 1);
+});
+
 /* ---- guardarFilaVerificada: se simula /api/sheets ---- */
 
 /** `comportamiento(cuerpo)` devuelve lo que responde el servidor, o un Error para un HTTP 502. */

@@ -119,18 +119,25 @@ function persona(valor) { const k=dni(valor); if(!k) throw new Error("DNI invali
  * ANTES de devolver: la vista "estado total" solo necesita a un puñado de las
  * 600+ personas de la hoja, y lo mas lento del pedido es serializar y mandar
  * por red el JSON de todo el mundo (1.5+ MB), no la lectura del rango.
+ *
+ * El filtro se aplica sobre la fila cruda, antes de `datosFila`, que es lo
+ * caro: por cada persona arma 18 riesgos y resuelve ~20 nombres de columna con
+ * CABECERA.indexOf (un recorrido de las 97 columnas cada vez). Hacerlo primero
+ * para las 600+ y descartar despues gastaba casi todo ese trabajo en gente que
+ * no iba a viajar, y es de lo que empujaba al pedido por encima del limite de
+ * tiempo de la funcion.
  */
 function listado(filtro) {
   const sh=personal(), first=CONFIG.filaDatos, last=sh.getLastRow();
   if (last < first) return { personas: [] };
   const width = Math.min(sh.getMaxColumns(), CABECERA.length);
   const filas = sh.getRange(first, 1, last-first+1, width).getValues();
-  const iDni = DATOS.indexOf("DNI");
-  let personas = filas.filter(f => String(f[iDni]||"").trim()).map(f => datosFila(completas(f)));
+  const iDni = DATOS.indexOf("DNI"), iEstado = CABECERA.indexOf("ESTADO_FINAL"), iEsta = CABECERA.indexOf("_EstaTE");
+  let utiles = filas.filter(f => String(f[iDni]||"").trim());
   if (filtro === "vencidos_activos") {
-    personas = personas.filter(p => normal(p.estadoFinal) === "VENCIDO" && normal(p.estadoTrabajador) === "ACTIVO");
+    utiles = utiles.filter(f => normal(f[iEstado]) === "VENCIDO" && normal(f[iEsta]) === "ACTIVO");
   }
-  return { personas: personas };
+  return { personas: utiles.map(f => datosFila(completas(f))) };
 }
 function colLetra(n) { let s=""; for(;n>0;n=Math.floor((n-1)/26)) s=String.fromCharCode(65+(n-1)%26)+s; return s; }
 /** Formula de ESTADO_xx de la hoja (NO APLICA sin fecha, VENCIDO >365 dias, ACTUALIZAR desde 330),

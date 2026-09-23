@@ -169,6 +169,26 @@ export function montarPestanas(pares, inicial = 0) {
   return activar;
 }
 
+/**
+ * Llama a `fn` cada vez que la vista `idVista` pase de oculta a visible (y de
+ * entrada, si ya se esta viendo).
+ *
+ * La precarga del arranque deja datos en vistas que el usuario todavia no ha
+ * abierto. Pintar cientos de filas de una tabla escondida es trabajo tirado y
+ * se nota como un tiron al cargar la pagina, asi que las vistas pesadas lo
+ * posponen hasta que se las mira.
+ */
+export function alMostrarse(idVista, fn) {
+  const vista = $(idVista);
+  if (!vista) return () => {};
+  if (!vista.hidden) fn();
+  const observador = new MutationObserver(() => {
+    if (!vista.hidden) fn();
+  });
+  observador.observe(vista, { attributes: true, attributeFilter: ["hidden"] });
+  return () => observador.disconnect();
+}
+
 /* ------------------------------------------------------------------ */
 /* Filtro de seleccion multiple                                        */
 /* ------------------------------------------------------------------ */
@@ -326,23 +346,52 @@ export function textoDias(dias) {
 /* ------------------------------------------------------------------ */
 
 /**
+ * Estados en los que vale la pena volver a pedir lo mismo, porque no hay nada
+ * malo en el pedido: el puente no logro hablar con Apps Script (502), la
+ * funcion todavia no estaba lista (503) o tardo tanto que la corto la red de
+ * Vercel (504). El 504 hay que contemplarlo aunque el puente ya se rinda antes
+ * con su propio 502: el corte de la plataforma puede llegar igual (una accion
+ * pesada, un arranque en frio), y ahi no llega JSON sino una pagina de error,
+ * que en pantalla se lee como "respuesta ilegible (HTTP 504)".
+ */
+const REINTENTABLES = new Set([502, 503, 504]);
+
+/**
  * Las cargas mas pesadas (todo el personal de una vez) son las que mas
  * tardan en Apps Script. Cuando dos personas las disparan casi a la vez,
  * Google satura y responde con una pagina rota en vez de JSON (ya
- * reintentado del lado servidor sin exito). Eso llega aca como HTTP 502; se
- * reintenta una vez mas, desde el navegador, antes de rendirse y avisarle al
- * usuario.
+ * reintentado del lado servidor sin exito). Se reintenta una vez mas, desde
+ * el navegador, antes de rendirse y avisarle al usuario.
  */
 export async function conReintento(tarea, consola, intentos = 2) {
   for (let i = 1; ; i++) {
     try {
       return await tarea();
     } catch (e) {
-      if (e.estado !== 502 || i > intentos) throw e;
+      if (!REINTENTABLES.has(e.estado) || i > intentos) throw e;
       consola(`Apps Script no respondió, reintentando (${i}/${intentos})…`, "warn");
       await new Promise((r) => setTimeout(r, 1500 * i));
     }
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Antiguedad de los datos                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * "hace un momento" / "hace 3 min" / "hace 2 h".
+ *
+ * Las vistas reutilizan lo que ya cargo otra pestana, asi que tienen que poder
+ * decir de cuando es lo que se esta viendo: sin eso, datos compartidos serian
+ * datos de procedencia desconocida.
+ */
+export function hace(ts) {
+  if (!ts) return "";
+  const seg = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (seg < 45) return "hace un momento";
+  if (seg < 3600) return `hace ${Math.max(1, Math.round(seg / 60))} min`;
+  return `hace ${Math.round(seg / 3600)} h`;
 }
 
 /* ------------------------------------------------------------------ */
