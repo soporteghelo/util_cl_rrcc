@@ -1,8 +1,9 @@
 /**
- * Lectura de .xlsx / .csv / .txt en el navegador (sin backend).
+ * Lectura y escritura de .xlsx / .csv / .txt en el navegador (sin backend).
  *
  * Un .xlsx es un ZIP con XML dentro, asi que se abre con JSZip y se parsea con
- * DOMParser. No hace falta ninguna libreria de Excel.
+ * DOMParser (y se escribe igual, ver `armarXlsx`). No hace falta ninguna
+ * libreria de Excel.
  *
  * Lo importante es distinguir si la celda venia como TEXTO o como NUMERO:
  * si venia como numero, Excel ya se comio los ceros de la izquierda y hay que
@@ -10,6 +11,7 @@
  */
 
 import JSZip from "jszip";
+import { aIso, isoASerial } from "../../shared/estados.js";
 
 const CABECERA_DNI = /\b(dni|documento|nro?\.?\s*doc|n[uú]m\.?\s*doc|doc\.?\s*ident|c[eé]dula|identidad|ndocumento)\b/i;
 
@@ -202,4 +204,219 @@ export async function extraerDocumentos(archivo) {
     numericas,
     detalle: eleccion ? eleccion.motivo : "todas las celdas con forma de documento",
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Escritura de XLSX                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Un .xlsx tambien se escribe a mano con JSZip, igual que el .docx de
+ * `docx.js`: son cuatro XML dentro de un ZIP, y evita sumar una libreria de
+ * varios MB solo para volcar una tabla.
+ *
+ * Los valores van como `inlineStr` (el texto vive en la propia celda) en vez
+ * de la tabla de cadenas compartidas: ocupa algo mas, pero ahorra la mitad
+ * del formato y mantiene los DNI como TEXTO, que es lo unico innegociable
+ * aca (como numero, Excel se come el cero de la izquierda y "07481337"
+ * vuelve convertido en 7481337).
+ */
+
+export const MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+const NS_HOJA = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+/** Estilos declarados en `estilos()`, por posicion dentro de <cellXfs>. */
+const ESTILO = { NORMAL: 0, CABECERA: 1, FECHA: 2 };
+
+function xml(valor) {
+  return String(valor === null || valor === undefined ? "" : valor)
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "") // XML 1.0 no admite caracteres de control
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** 0 -> "A", 25 -> "Z", 26 -> "AA" (la vuelta de `columnaDeRef`). */
+function refDeColumna(n) {
+  let s = "";
+  for (let i = n + 1; i > 0; i = Math.floor((i - 1) / 26)) {
+    s = String.fromCharCode(65 + ((i - 1) % 26)) + s;
+  }
+  return s;
+}
+
+/**
+ * Una celda. `tipo`:
+ *  - "fecha"  -> serial de Excel con formato dd/mm/yyyy, para poder ordenar
+ *                y filtrar por fecha (si no se entiende, cae a texto)
+ *  - "numero" -> numero de verdad
+ *  - resto    -> texto, que es lo que necesitan el DNI y los codigos
+ */
+function celda(ref, valor, tipo) {
+  if (valor === null || valor === undefined || valor === "") return "";
+
+  if (tipo === "fecha") {
+    const serial = isoASerial(aIso(valor));
+    if (serial !== "") return `<c r="${ref}" s="${ESTILO.FECHA}"><v>${serial}</v></c>`;
+  } else if (tipo === "numero" && Number.isFinite(Number(valor))) {
+    return `<c r="${ref}"><v>${Number(valor)}</v></c>`;
+  }
+
+  return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xml(valor)}</t></is></c>`;
+}
+
+function hojaXml(hoja) {
+  const columnas = hoja.columnas || [];
+  const filas = hoja.filas || [];
+  const ultima = refDeColumna(Math.max(columnas.length - 1, 0));
+  const alto = filas.length + 1;
+
+  const anchos = columnas
+    .map((c, i) => `<col min="${i + 1}" max="${i + 1}" width="${Number(c.ancho) || 14}" customWidth="1"/>`)
+    .join("");
+
+  const cabecera =
+    `<row r="1">` +
+    columnas
+      .map(
+        (c, i) =>
+          `<c r="${refDeColumna(i)}1" t="inlineStr" s="${ESTILO.CABECERA}"><is><t>${xml(c.titulo)}</t></is></c>`
+      )
+      .join("") +
+    `</row>`;
+
+  const cuerpo = filas
+    .map((fila, f) => {
+      const r = f + 2;
+      const celdas = columnas.map((c, i) => celda(refDeColumna(i) + r, (fila || [])[i], c.tipo)).join("");
+      return `<row r="${r}">${celdas}</row>`;
+    })
+    .join("");
+
+  // El orden de los elementos NO es libre: el esquema pide
+  // dimension -> sheetViews -> sheetFormatPr -> cols -> sheetData -> autoFilter,
+  // y Excel rechaza el libro entero ("contenido ilegible") si se altera.
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    `<worksheet xmlns="${NS_HOJA}">` +
+    `<dimension ref="A1:${ultima}${alto}"/>` +
+    '<sheetViews><sheetView workbookViewId="0">' +
+    // la cabecera se queda fija al bajar por la lista
+    '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
+    '<selection pane="bottomLeft" activeCell="A2" sqref="A2"/>' +
+    "</sheetView></sheetViews>" +
+    '<sheetFormatPr defaultRowHeight="15"/>' +
+    (anchos ? `<cols>${anchos}</cols>` : "") +
+    `<sheetData>${cabecera}${cuerpo}</sheetData>` +
+    `<autoFilter ref="A1:${ultima}${alto}"/>` +
+    "</worksheet>"
+  );
+}
+
+function estilos() {
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    `<styleSheet xmlns="${NS_HOJA}">` +
+    '<numFmts count="1"><numFmt numFmtId="164" formatCode="dd/mm/yyyy"/></numFmts>' +
+    '<fonts count="2">' +
+    '<font><sz val="11"/><name val="Calibri"/></font>' +
+    '<font><b/><sz val="11"/><name val="Calibri"/></font>' +
+    "</fonts>" +
+    // Excel da por hechos estos dos rellenos: sin ellos no abre el libro
+    '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>' +
+    '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+    '<cellXfs count="3">' +
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+    '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
+    '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+    "</cellXfs>" +
+    '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
+    "</styleSheet>"
+  );
+}
+
+/** Excel no admite \ / ? * [ ] : en el nombre de una hoja, ni mas de 31 caracteres. */
+function nombreDeHoja(nombre, usados) {
+  const base = String(nombre || "Hoja").replace(/[\\/?*[\]:]/g, " ").trim().slice(0, 31) || "Hoja";
+  let final = base;
+  for (let n = 2; usados.has(final.toUpperCase()); n++) {
+    const sufijo = ` (${n})`;
+    final = base.slice(0, 31 - sufijo.length) + sufijo;
+  }
+  usados.add(final.toUpperCase());
+  return final;
+}
+
+/**
+ * Arma un .xlsx y lo devuelve como Blob (o como pida `tipo`, ver JSZip).
+ *
+ * `hojas` = [{ nombre, columnas: [{ titulo, ancho, tipo }], filas: [[...]] }],
+ * y cada fila es un array con un valor por columna, en ese mismo orden.
+ */
+export async function armarXlsx(hojas, tipo = "blob") {
+  const lista = (hojas || []).filter(Boolean);
+  if (!lista.length) throw new Error("el Excel necesita al menos una hoja");
+
+  const usados = new Set();
+  const nombres = lista.map((h) => nombreDeHoja(h.nombre, usados));
+
+  const zip = new JSZip();
+
+  zip.file(
+    "[Content_Types].xml",
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      `<Override PartName="/xl/workbook.xml" ContentType="${MIME_XLSX}.main+xml"/>` +
+      lista
+        .map(
+          (_, i) =>
+            `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ` +
+            'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        )
+        .join("") +
+      '<Override PartName="/xl/styles.xml" ' +
+      'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+      "</Types>"
+  );
+
+  zip.file(
+    "_rels/.rels",
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      `<Relationship Id="rId1" Type="${NS_REL}/officeDocument" Target="xl/workbook.xml"/>` +
+      "</Relationships>"
+  );
+
+  zip.file(
+    "xl/workbook.xml",
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      `<workbook xmlns="${NS_HOJA}" xmlns:r="${NS_REL}"><sheets>` +
+      nombres.map((n, i) => `<sheet name="${xml(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("") +
+      "</sheets></workbook>"
+  );
+
+  zip.file(
+    "xl/_rels/workbook.xml.rels",
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      nombres
+        .map(
+          (_, i) =>
+            `<Relationship Id="rId${i + 1}" Type="${NS_REL}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`
+        )
+        .join("") +
+      `<Relationship Id="rId${lista.length + 1}" Type="${NS_REL}/styles" Target="styles.xml"/>` +
+      "</Relationships>"
+  );
+
+  zip.file("xl/styles.xml", estilos());
+  lista.forEach((hoja, i) => zip.file(`xl/worksheets/sheet${i + 1}.xml`, hojaXml(hoja)));
+
+  return zip.generateAsync({ type: tipo, mimeType: MIME_XLSX, compression: "DEFLATE" });
 }

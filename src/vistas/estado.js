@@ -8,9 +8,18 @@
  * reporte de lo guardado, no vuelve a verificar certificados.
  */
 
-import { $, crearConsola, crearMultiSelect, notificar, escaparHtml, conReintento } from "./comun.js";
+import {
+  $,
+  crearConsola,
+  crearMultiSelect,
+  notificar,
+  escaparHtml,
+  conReintento,
+  descargarBlob,
+} from "./comun.js";
 import { cargarContexto, listarPersonal } from "../lib/renovacion.js";
-import { personasPorRiesgo, aFormatoCorto } from "../../shared/estados.js";
+import { armarXlsx } from "../lib/excel.js";
+import { personasPorRiesgo, aFormatoCorto, aIso, hoyIso } from "../../shared/estados.js";
 import { RRCC } from "../../shared/rrcc.js";
 
 const CLASE_ESTADO = {
@@ -29,6 +38,24 @@ const COLUMNAS = [
   { campo: "nombre", texto: "Apellidos y Nombres", valor: (it) => (it.persona.nombreCompleto || "").toUpperCase() },
   { campo: "estado", texto: "Estado", valor: (it) => RANGO_ESTADO[it.estado] ?? 99 },
   { campo: "fecha", texto: "F. Vencimiento", valor: (it) => it.riesgo.venc || "" },
+];
+
+/**
+ * Columnas del Excel exportado: las cinco que se ven en pantalla mas el RRCC
+ * (impreso es el titulo de cada tabla, pero en una hoja plana tiene que ir en
+ * cada fila para poder filtrar) y los dias que faltan, que ya estan
+ * calculados y son lo primero por lo que se suele ordenar.
+ */
+const COLUMNAS_EXCEL = [
+  { titulo: "RRCC", ancho: 7, valor: (it, g) => g.codigo },
+  { titulo: "RIESGO CRITICO", ancho: 32, valor: (it, g) => g.nombre },
+  { titulo: "DNI", ancho: 12, valor: (it) => it.persona.dni || "" },
+  { titulo: "CARGO", ancho: 30, valor: (it) => (it.persona.cargo || "").toUpperCase() },
+  { titulo: "APELLIDOS Y NOMBRES", ancho: 34, valor: (it) => (it.persona.nombreCompleto || "").toUpperCase() },
+  { titulo: "ESTADO", ancho: 13, valor: (it) => it.estado },
+  { titulo: "F. VENCIMIENTO", ancho: 16, tipo: "fecha", valor: (it) => it.riesgo.venc || "" },
+  { titulo: "DIAS", ancho: 8, tipo: "numero", valor: (it) => (it.dias === null ? "" : it.dias) },
+  { titulo: "AREA", ancho: 26, valor: (it) => (it.persona.area || "").toUpperCase() },
 ];
 
 const CLAVE_CACHE = "rrcc.estado.snapshot";
@@ -59,9 +86,12 @@ export function montarEstado() {
 
   const el = {
     buscar: $("es-buscar"),
+    hasta: $("es-hasta"),
+    hastaBorrar: $("es-hasta-borrar"),
     orden: $("es-orden"),
     cargar: $("es-cargar"),
     imprimir: $("es-imprimir"),
+    excel: $("es-excel"),
     count: $("es-count"),
     resCount: $("es-res-count"),
     resultados: $("es-resultados"),
@@ -73,6 +103,7 @@ export function montarEstado() {
   let configSnapshot = null; // config del ultimo snapshot, solo hasta que llegue el contexto real
   let descendente = false;
   let cargando = false;
+  let visible = { grupos: [], vencHasta: "" }; // lo ultimo pintado, que es lo que se imprime y se exporta
   const ordenPorGrupo = new Map(); // codigo RRCC -> { campo, direccion }, al hacer clic en un encabezado
 
   const selRiesgo = crearMultiSelect(
@@ -110,7 +141,7 @@ export function montarEstado() {
     });
   }
 
-  function htmlDeGrupo(grupo) {
+  function htmlDeGrupo(grupo, vencHasta) {
     const orden = ordenPorGrupo.get(grupo.codigo);
     const filas = itemsDelGrupo(grupo)
       .map(({ persona, riesgo, estado }) => {
@@ -146,13 +177,18 @@ export function montarEstado() {
     // <th>): la fila de titulo de arriba tiene un solo <th colspan> y, sin
     // colgroup, un motor de tablas puede tomar ESA fila como referencia para
     // repartir columnas en table-layout:fixed y arruinar el ancho de las 4.
+    // El corte por fecha va en el titulo que se imprime: en pantalla se ve en
+    // el contador de arriba, pero la hoja impresa tiene que decir por si sola
+    // hasta que fecha esta recortada la lista.
+    const corte = vencHasta ? ` · VENCEN HASTA ${aFormatoCorto(vencHasta)}` : "";
+
     return (
       `<section class="estado-grupo">` +
       `<div class="estado-grupo-head"><b>${grupo.codigo} · ${escaparHtml(grupo.nombre)}</b><span>${grupo.items.length}</span></div>` +
       `<table class="estado-tabla" data-codigo="${grupo.codigo}">` +
       `<colgroup><col class="ec-dni" /><col class="ec-cargo" /><col class="ec-nombre" /><col class="ec-estado" /><col class="ec-fecha" /></colgroup>` +
       `<thead>` +
-      `<tr class="estado-tabla-titulo"><th colspan="${COLUMNAS.length}">${grupo.codigo} · ${escaparHtml(grupo.nombre)} (${grupo.items.length})</th></tr>` +
+      `<tr class="estado-tabla-titulo"><th colspan="${COLUMNAS.length}">${grupo.codigo} · ${escaparHtml(grupo.nombre)} (${grupo.items.length})${corte}</th></tr>` +
       `<tr>${encabezado}</tr>` +
       `</thead><tbody>${filas}</tbody></table>` +
       `</section>`
@@ -163,6 +199,9 @@ export function montarEstado() {
     const textoFiltro = el.buscar.value.trim().toUpperCase();
     const riesgosFiltro = selRiesgo.obtener();
     const estadosFiltro = selEstado.obtener();
+    // Corte por fecha de vencimiento: deja solo lo que vence hasta ese dia
+    // (incluido), es decir lo que hay que renovar de aqui a esa fecha.
+    const vencHasta = aIso(el.hasta.value);
     const umbrales = {
       vencido: Number(contexto?.config?.UMBRAL_VENCIDO ?? configSnapshot?.UMBRAL_VENCIDO ?? 365),
       actualizar: Number(contexto?.config?.UMBRAL_ACTUALIZAR ?? configSnapshot?.UMBRAL_ACTUALIZAR ?? 330),
@@ -177,6 +216,7 @@ export function montarEstado() {
       items: g.items
         .filter((it) => (it.persona.estadoTrabajador || "").toUpperCase() === "ACTIVO")
         .filter((it) => estadosFiltro.size === 0 || estadosFiltro.has(it.estado))
+        .filter((it) => !vencHasta || (it.riesgo.venc && it.riesgo.venc <= vencHasta))
         .filter(
           (it) =>
             !textoFiltro ||
@@ -197,15 +237,51 @@ export function montarEstado() {
       .filter((g) => riesgosFiltro.size === 0 || riesgosFiltro.has(g.codigo))
       .filter((g) => g.items.length);
 
+    const vacio = !personas.length
+      ? "carga el personal para ver sus vencimientos"
+      : vencHasta
+        ? `ningún RRCC vence hasta el ${aFormatoCorto(vencHasta)} con este filtro`
+        : "nada coincide con el filtro";
+
     el.resultados.innerHTML = grupos.length
-      ? grupos.map(htmlDeGrupo).join("")
-      : `<div class="estado-vacio">${
-          personas.length ? "nada coincide con el filtro" : "carga el personal para ver sus vencimientos"
-        }</div>`;
+      ? grupos.map((g) => htmlDeGrupo(g, vencHasta)).join("")
+      : `<div class="estado-vacio">${vacio}</div>`;
+
+    visible = { grupos, vencHasta };
 
     const totalItems = grupos.reduce((n, g) => n + g.items.length, 0);
-    el.resCount.textContent = personas.length ? `${totalItems} vencimiento(s) · ${grupos.length} RRCC` : "";
+    el.resCount.textContent = personas.length
+      ? `${totalItems} vencimiento(s) · ${grupos.length} RRCC` + (vencHasta ? ` · hasta ${aFormatoCorto(vencHasta)}` : "")
+      : "";
     el.imprimir.disabled = totalItems === 0;
+    el.excel.disabled = totalItems === 0;
+  }
+
+  /**
+   * Exporta a .xlsx lo mismo que saldria por la impresora: los grupos que
+   * estan a la vista, en su orden, con los filtros ya aplicados. Va todo a
+   * UNA hoja (con la columna RRCC) en vez de una hoja por riesgo: asi se
+   * puede filtrar, ordenar y hacer tablas dinamicas sobre el conjunto.
+   */
+  async function exportar() {
+    const filas = visible.grupos.flatMap((g) =>
+      itemsDelGrupo(g).map((it) => COLUMNAS_EXCEL.map((c) => c.valor(it, g)))
+    );
+    if (!filas.length) return;
+
+    const corte = visible.vencHasta ? ` hasta ${visible.vencHasta}` : "";
+    const nombre = `ESTADO RRCC ${hoyIso()}${corte}.xlsx`;
+
+    el.excel.disabled = true;
+    try {
+      descargarBlob(await armarXlsx([{ nombre: "ESTADO RRCC", columnas: COLUMNAS_EXCEL, filas }]), nombre);
+      consola(`${filas.length} fila(s) exportadas a ${nombre}`, "ok");
+    } catch (e) {
+      consola(`no se pudo exportar: ${e.message}`, "err");
+      notificar("No se pudo exportar", e.message, "warn");
+    } finally {
+      el.excel.disabled = false;
+    }
   }
 
   async function cargar() {
@@ -279,6 +355,13 @@ export function montarEstado() {
 
   el.cargar.addEventListener("click", cargar);
   el.buscar.addEventListener("input", pintar);
+  el.hasta.addEventListener("input", pintar);
+  el.hasta.addEventListener("change", pintar);
+  el.hastaBorrar.addEventListener("click", () => {
+    el.hasta.value = "";
+    pintar();
+    el.hasta.focus();
+  });
   selRiesgo.alCambiar(pintar);
   selEstado.alCambiar(pintar);
   el.orden.addEventListener("click", () => {
@@ -288,6 +371,7 @@ export function montarEstado() {
     pintar();
   });
   el.imprimir.addEventListener("click", () => window.print());
+  el.excel.addEventListener("click", exportar);
 
   pintar();
 
