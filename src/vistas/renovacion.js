@@ -14,7 +14,7 @@ import { desdeTexto, normalizarLista } from "../lib/dni.js";
 import { extraerDocumentos } from "../lib/excel.js";
 import { drive, desdeBase64, descargar, blobABase64 } from "../lib/api.js";
 import { obtenerCatalogo, catalogoGuardado } from "../lib/datos.js";
-import { cargarContexto, renovarPersona, consultarPersona, generarSalidas, resumenAutorizaciones, fotoDeDni, subirFoto, guardarFilaVerificada, MIME_DOCX } from "../lib/renovacion.js";
+import { cargarContexto, renovarPersona, consultarPersona, generarSalidas, resumenAutorizaciones, fotoDeDni, fotoAntigua, subirFoto, guardarFilaVerificada, MIME_DOCX } from "../lib/renovacion.js";
 import {
   aFormatoCorto,
   aIso,
@@ -30,7 +30,7 @@ import {
 } from "../../shared/estados.js";
 import { colTipo, INDICE } from "../../shared/rrcc.js";
 import { autocompletar } from "./autocompletar.js";
-import { medirImagen, armarAutorizacion } from "../lib/docx.js";
+import { armarAutorizacion } from "../lib/docx.js";
 import { dibujarFotocheck, combinarFotocheckAntiguo } from "../lib/fotocheck.js";
 import { abrirFotocheck, actualizarFotocheck, cerrarFotocheck, fotocheckAbiertoDe } from "./fotocheck-modal.js";
 
@@ -1348,6 +1348,7 @@ export function montarRenovacion() {
     let conSalida = 0;
     let fallos = 0;
     const nuevos = [];
+    let salidaEnCurso = Promise.resolve();
 
     try {
       if (!contexto) {
@@ -1364,21 +1365,6 @@ export function montarRenovacion() {
         consola.cabecera(`[${i + 1}/${lista.length}] DNI ${obj.dni}`);
 
         try {
-          const r = soloConsulta
-            ? await consultarPersona(obj.dni, contexto, { log: consola, senal })
-            : await renovarPersona(obj.dni, contexto, {
-                log: consola,
-                senal,
-                escribir: el.escribir.checked,
-              });
-
-          if (r.estado === "nuevo") {
-            nuevos.push(obj.dni);
-            pintarFicha(obj.dni, { error: "no está en la base — usa la pestaña NUEVO PERSONAL" });
-            hechas++;
-            continue;
-          }
-
           // el fotocheck antiguo adjuntado a mano (botones de la ficha) no viene
           // de esta corrida: se rescata de la ficha anterior para no perderlo,
           // anverso y reverso por separado (por si luego se reemplaza uno solo).
@@ -1390,6 +1376,36 @@ export function montarRenovacion() {
           // FOTOS fallo (o Drive todavia no la indexa), no se pierde al
           // volver a correr la lista.
           const fotoManual = anterior?.fotoManual || null;
+
+          // La foto solo necesita el DNI: se pide YA, en paralelo con la hoja y
+          // el inventario de certificados, para que el fotocheck se vea con su
+          // foto apenas se pinta la ficha y no al final de las subidas. El
+          // fotocheck antiguo depende de la fila: se pide en cuanto se lee,
+          // aprovechando que la fila de Apps Script queda libre mientras se
+          // consultan JOMISER, EIN y Drive.
+          const fotoP = fotoDeDni(obj.dni, senal).catch(() => null);
+          let antiguoP = null;
+          const alLeer = (p) => {
+            if (!antiguoManual && p.fotocheckAntiguoDriveId) {
+              antiguoP = fotoAntigua(p.fotocheckAntiguoDriveId, senal).catch(() => null);
+            }
+          };
+
+          const r = soloConsulta
+            ? await consultarPersona(obj.dni, contexto, { log: consola, senal, alLeer })
+            : await renovarPersona(obj.dni, contexto, {
+                log: consola,
+                senal,
+                escribir: el.escribir.checked,
+                alLeer,
+              });
+
+          if (r.estado === "nuevo") {
+            nuevos.push(obj.dni);
+            pintarFicha(obj.dni, { error: "no está en la base — usa la pestaña NUEVO PERSONAL" });
+            hechas++;
+            continue;
+          }
 
           const ficha = {
             persona: r.despues,
@@ -1406,6 +1422,8 @@ export function montarRenovacion() {
             antiguoManual,
             antiguoAnversoFile,
             antiguoReversoFile,
+            antiguo: antiguoManual,
+            fotoManual,
           };
           pintarFicha(obj.dni, ficha);
           if (r.resumen) {
@@ -1417,35 +1435,56 @@ export function montarRenovacion() {
             );
           }
 
-          if (!soloConsulta && el.salidas.checked) {
-            barra.set(hechas, lista.length, `${obj.dni} · generando salidas`);
-            ficha.salida = await generarSalidas(r, contexto, {
-              log: consola,
-              senal,
-              avance: (hecho, total, que) => barra.set(hechas, lista.length, `${obj.dni} · ${que}`),
-              antiguoManual,
-            });
-            conSalida++;
-          }
-
-          // el modal necesita la foto y el fotocheck antiguo; si ya se
-          // generaron las salidas vienen de ahi y no se vuelven a bajar
-          if (ficha.salida) {
-            ficha.foto = ficha.salida.foto;
-            ficha.antiguo = ficha.salida.antiguo;
-          } else {
-            Object.assign(ficha, await materialFotocheck(r.despues, senal));
-            if (antiguoManual) ficha.antiguo = antiguoManual;
-          }
           // Drive no tenia la foto (o no se pudo bajar): si se habia agregado
           // a mano en una corrida anterior, se usa esa en vez de dejar la
           // ficha sin foto. `fotoResuelta` recien queda en true aca: hasta
           // este punto no se sabe todavia si hay foto o no, y la tarjeta no
-          // debe ofrecer "agregar foto" mientras se sigue buscando.
-          if (!ficha.foto && fotoManual) ficha.foto = fotoManual;
-          ficha.fotoManual = fotoManual;
+          // debe ofrecer "agregar foto" mientras se sigue buscando. Casi
+          // siempre la foto ya llego mientras se leia el inventario.
+          ficha.foto = (await fotoP) || fotoManual;
           ficha.fotoResuelta = true;
           pintarFicha(obj.dni, ficha);
+          refrescarFotocheck(obj.dni);
+
+          // el antiguo llega cuando llegue: solo lo usan el modal y el Word
+          if (antiguoP) {
+            antiguoP.then((a) => {
+              if (a && !ficha.antiguoManual) ficha.antiguo = a;
+            });
+          }
+
+          if (!soloConsulta && el.salidas.checked) {
+            // Las salidas de esta persona corren en segundo plano mientras se
+            // lee a la siguiente: las descargas y la busqueda no pasan por
+            // Apps Script, asi que se solapan. Se genera una carpeta a la vez
+            // para no mezclar sus subidas.
+            await salidaEnCurso;
+            if (senal.aborted) break;
+            const dni = obj.dni;
+            const varias = lista.length > 1;
+            const logSalida = varias ? (m, t) => consola(`[${dni}] ${m}`, t) : consola;
+            barra.set(hechas, lista.length, `${dni} · generando salidas`);
+            salidaEnCurso = generarSalidas(r, contexto, {
+              log: logSalida,
+              senal,
+              avance: (hecho, total, que) => barra.set(hechas, lista.length, `${dni} · ${que}`),
+              antiguoManual,
+              material: { foto: ficha.foto, antiguo: antiguoP },
+            }).then(
+              (salida) => {
+                ficha.salida = salida;
+                if (!ficha.antiguoManual && salida.antiguo) ficha.antiguo = salida.antiguo;
+                conSalida++;
+                pintarFicha(dni, ficha);
+                el.resCount.textContent = `${hechas}/${lista.length} · ${conSalida} con salidas`;
+              },
+              (e) => {
+                if (senal.aborted) return;
+                fallos++;
+                logSalida(`no se pudo generar la carpeta: ${e.message}`, "err");
+              }
+            );
+          }
         } catch (e) {
           if (senal.aborted) break;
           fallos++;
@@ -1458,6 +1497,9 @@ export function montarRenovacion() {
         el.resCount.textContent =
           `${hechas}/${lista.length}` + (soloConsulta ? " consultada(s)" : ` · ${conSalida} con salidas`);
       }
+
+      // la ultima carpeta puede seguir subiendo
+      await salidaEnCurso;
 
       /* ---------------- cierre ---------------- */
       barra.set(1, 1, senal.aborted ? "abortado" : "completado");
@@ -1489,31 +1531,6 @@ export function montarRenovacion() {
       el.run.disabled = false;
       el.stop.hidden = true;
     }
-  }
-
-  /**
-   * Foto de la persona y del fotocheck antiguo, para el modal. Si falta
-   * alguna no es un error: el fotocheck se dibuja igual y el Word lleva
-   * solo la imagen nueva.
-   */
-  async function materialFotocheck(persona, senal) {
-    const salida = { foto: null, antiguo: null };
-    try {
-      salida.foto = await fotoDeDni(persona.dni, senal);
-    } catch {
-      /* sin foto en la carpeta FOTOS */
-    }
-    if (persona.fotocheckAntiguoDriveId) {
-      try {
-        const r = await drive({ accion: "bajar", id: persona.fotocheckAntiguoDriveId }, senal);
-        const bytes = desdeBase64(r.datos);
-        const medida = await medirImagen(new Blob([bytes], { type: r.mime }));
-        salida.antiguo = { datos: bytes, mime: r.mime, ancho: medida.ancho, alto: medida.alto };
-      } catch {
-        /* sin fotocheck antiguo */
-      }
-    }
-    return salida;
   }
 
   el.run.addEventListener("click", () => {

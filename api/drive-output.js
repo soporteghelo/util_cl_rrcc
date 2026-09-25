@@ -8,8 +8,14 @@
  *   carpeta  ->  { nombre } crea (o reutiliza) la subcarpeta de la persona
  *   carpetas ->  comprueba que DATA y FOTOS existan y sean accesibles
  *   subir    ->  { carpetaId, nombre, mime, datos } un archivo (base64)
+ *   subir-lote -> { carpetaId, archivos: [{ nombre, mime, datos }] } varios
+ *               archivos en una sola llamada (cada una a Apps Script cuesta
+ *               varios segundos fijos, asi que agruparlas es lo que mas rinde)
  *   foto     ->  sube una foto a la carpeta FOTOS
- *   foto-de  ->  { dni } baja la foto de esa persona, buscandola por nombre
+ *   foto-de  ->  { dni, soloPublica } baja la foto de esa persona, buscandola
+ *               por nombre. Con `soloPublica` no cae a Apps Script si la
+ *               lectura publica no la encuentra: responde `{ respaldo: true }`
+ *               y el navegador decide cuando hacer esa consulta mas lenta.
  *   bajar    ->  { id } el contenido de un archivo, en base64
  *   listar   ->  { carpetaId } que quedo dentro
  *
@@ -110,6 +116,19 @@ async function accionSubir({ carpetaId, nombre, mime, datos, reemplazar }) {
   return { ok: true, ...r };
 }
 
+/** Tope por lote: el cuerpo en base64 tiene que caber en los 4.5 MB de Vercel. */
+const MAX_LOTE = 3 * 1024 * 1024;
+
+async function accionSubirLote({ carpetaId, archivos }) {
+  if (!carpetaId) throw new Error("falta carpetaId");
+  if (!Array.isArray(archivos) || !archivos.length) throw new Error("falta la lista de archivos");
+  const total = archivos.reduce((s, a) => s + String(a?.datos || "").length, 0);
+  if (total > MAX_LOTE * 1.4) throw new Error("el lote es demasiado grande: subelo en partes");
+  const subidos = [];
+  for (const a of archivos) subidos.push(await accionSubir({ carpetaId, ...a }));
+  return { ok: true, archivos: subidos };
+}
+
 async function accionFoto({ nombre, mime, datos, carpetaId }) {
   const destino = carpetaId || (await carpetaFotos());
   if (!destino) throw new Error("no se encontro la carpeta FOTOS en Drive");
@@ -144,6 +163,7 @@ const ACCIONES = {
   carpeta: accionCarpeta,
   carpetas: accionCarpetas,
   subir: accionSubir,
+  "subir-lote": accionSubirLote,
   foto: accionFoto,
   "foto-de": accionFotoDe,
   bajar: accionBajar,
@@ -179,6 +199,10 @@ export default async function handler(req, res) {
             mime: archivo.mimeType || "image/png",
             datos: archivo.datos.toString("base64"),
           });
+          return;
+        }
+        if (body.soloPublica) {
+          res.status(200).json({ ok: false, encontrada: false, respaldo: true, dni: body.dni });
           return;
         }
       }

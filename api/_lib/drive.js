@@ -276,14 +276,26 @@ export async function driveFotoBuscar(dni) {
   const corto = documento.replace(/^0+/, "") || documento;
   const nombres = [...new Set([documento, corto].flatMap((n) => [n + ".png", n + ".jpg", n + ".jpeg"]))];
 
-  for (const nombre of nombres) {
-    const q = `'${carpeta}' in parents and trashed = false and name = '${nombre}'`;
-    const url =
-      `${DRIVE_API}/files?q=${encodeURIComponent(q)}` +
-      `&fields=${encodeURIComponent("files(id,name,mimeType,size)")}&pageSize=1&key=${cfg.apiKey}`;
-    const { buffer, res } = await pedir(url);
-    if (res.status !== 200) continue;
-    const archivo = JSON.parse(buffer.toString("utf8")).files?.[0];
+  // todas las grafias se consultan a la vez: de a una eran hasta 6 idas y
+  // vueltas a Drive antes de dar con la foto (o de saber que no hay)
+  const encontrados = await Promise.all(
+    nombres.map(async (nombre) => {
+      const q = `'${carpeta}' in parents and trashed = false and name = '${nombre}'`;
+      const url =
+        `${DRIVE_API}/files?q=${encodeURIComponent(q)}` +
+        `&fields=${encodeURIComponent("files(id,name,mimeType,size)")}&pageSize=1&key=${cfg.apiKey}`;
+      try {
+        const { buffer, res } = await pedir(url);
+        if (res.status !== 200) return null;
+        return JSON.parse(buffer.toString("utf8")).files?.[0] || null;
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  // se respeta el orden de preferencia (documento de 8 digitos, .png primero)
+  for (const archivo of encontrados) {
     if (!archivo) continue;
     const descarga = `${DRIVE_API}/files/${encodeURIComponent(archivo.id)}?alt=media&key=${cfg.apiKey}`;
     const r = await pedir(descarga, { timeout: 60000 });

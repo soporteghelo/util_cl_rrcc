@@ -114,6 +114,16 @@ export function drive(cuerpo, senal) {
   return unoALaVez(() => json("/api/drive-output", cuerpo, senal));
 }
 
+/**
+ * Igual que `drive`, pero sin hacer fila. SOLO para pedidos que no llegan a
+ * Apps Script (la foto por la lectura publica, `soloPublica: true`): esos no
+ * lo saturan, y hacerlos esperar detras de las subidas seria perder el
+ * paralelismo que justamente se busca.
+ */
+export function driveDirecto(cuerpo, senal) {
+  return json("/api/drive-output", cuerpo, senal);
+}
+
 /* ------------------------------------------------------------------ */
 /* Binarios <-> base64                                                 */
 /* ------------------------------------------------------------------ */
