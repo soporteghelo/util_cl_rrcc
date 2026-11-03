@@ -17,6 +17,7 @@ import {
   CRITERIOS_AUTO,
   EJECUCION_AUTO,
   candidatosLaterales,
+  einsPorFecha,
   elegirCertificadoLateral,
   candidatoPorReintentar,
   planFechas,
@@ -3101,8 +3102,26 @@ export function montarRenovacion() {
       }
     }
 
+    // junto al elegido, el EIN mas reciente que abra (si el elegido ya es un EIN, va solo ese)
+    const clavesConservar = [];
+    if (elegido?.origen !== "EIN") {
+      for (const ein of einsPorFecha(ficha)) {
+        const candidato = candidatos.find((c) => c.clave === ein.clave);
+        try {
+          if (candidato?.abre === false) continue;
+          if (!candidato?.abre) await leerCertificadoAuto(dni, ein);
+        } catch (x) {
+          if (!x.definitivo) avisos.push(`EIN ${ein.curso} ${ein.fecha}: no se pudo leer (${x.message})`);
+          continue;
+        }
+        clavesConservar.push(ein.clave);
+        logAuto(`EIN que va en el ZIP: ${ein.curso} ${ein.fecha}`, "info", dni);
+        break;
+      }
+    }
+
     // las "x": se pulsan sobre la ficha ya editada (un "C" no tiene "x")
-    for (const q of planQuitar(leerFichaAuto(dni) || ficha, elegido, candidatos, CRITERIOS_AUTO, plan.conservar)) {
+    for (const q of planQuitar(leerFichaAuto(dni) || ficha, elegido, candidatos, CRITERIOS_AUTO, plan.conservar, clavesConservar)) {
       if (!consulta) {
         const card = cardDe(dni);
         const boton = q.codigo

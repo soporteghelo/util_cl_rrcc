@@ -13,6 +13,7 @@ import {
   CRITERIOS_AUTO,
   planFechas,
   planQuitar,
+  einsPorFecha,
   faltaActualizar,
   fechaDeInduccion,
   fechasDeCursosPdf,
@@ -394,4 +395,22 @@ test("fechasDeCursosPdf: induccion de Drive con un certificado por curso", () =>
   assert.deepEqual(fechasDeCursosPdf(paginas), { ES: "2026-10-07", TA: "2026-10-07", HM: "2026-10-07", VEM: "2026-10-07" });
   // el INICIO con espacios tambien vale para la fecha general
   assert.equal(fechaDeInduccion("CON DNI: 12345678 INICIO: 7 / 10 / 2026", "12345678").fecha, "2026-10-07");
+});
+
+test("el EIN que se conserva: del mas reciente al mas antiguo, sin los que no tienen PDF, y no se le pone la x", () => {
+  const ein = (clave, fecha, descargable = true) => ({ origen: "EIN", clave, curso: "INDUCCION", fecha, descargable, excluido: false });
+  const f = ficha({
+    laterales: [
+      ein("EIN|viejo|", "08/11/2025"),
+      ein("EIN|sin-pdf|", "20/11/2025", false),
+      ein("EIN|nuevo|", "15/11/2025"),
+      { origen: "INDUCCION", clave: "INDUCCION|2026|", curso: "REINDUCCION 2026", fecha: "", descargable: true, excluido: false },
+    ],
+    riesgos: [],
+  });
+  assert.deepEqual(einsPorFecha(f).map((e) => e.clave), ["EIN|nuevo|", "EIN|viejo|"]);
+
+  const elegido = { clave: "INDUCCION|2026|", origen: "INDUCCION", fechaIso: "2026-10-28" };
+  const quitar = planQuitar(f, elegido, [], CRITERIOS_AUTO, [], ["EIN|nuevo|"]).map((q) => q.clave);
+  assert.deepEqual(quitar, ["EIN|viejo|", "EIN|sin-pdf|"]);
 });

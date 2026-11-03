@@ -1226,7 +1226,8 @@ export const CRITERIOS_AUTO = Object.freeze({
   origenesCertificadoA: ["JOMISER", "DRIVE"],
   // "x" a los certificados de HM y ES
   xEnHmEs: true,
-  // de los paneles laterales solo queda uno: el elegido (o el mas reciente)
+  // de los paneles laterales queda el elegido (o el mas reciente) y el ultimo
+  // EIN que abra, si el elegido no es ya un EIN
   soloUnCertificadoLateral: true,
   // EMO vencido o VEM "A" vencido -> el ZIP dice FALTA ACTUALIZAR
   marcarFaltaActualizar: true,
@@ -1513,6 +1514,16 @@ export function elegirCertificadoLateral(candidatos, hoy) {
 }
 
 /**
+ * Los EIN del panel que tienen PDF, del mas reciente al mas antiguo: de aqui
+ * sale el EIN que va en el ZIP junto al elegido (el primero que abra).
+ */
+export function einsPorFecha(ficha) {
+  return (ficha.laterales || [])
+    .filter((item) => item.origen === "EIN" && item.descargable !== false && item.clave)
+    .sort((a, b) => (isoDeCorta(b.fecha) || "").localeCompare(isoDeCorta(a.fecha) || ""));
+}
+
+/**
  * Un candidato que no abrio por un error pasajero (`fallaPasajera`, no "sin
  * certificado emitido") y que podria haber ganado: vigente y mas reciente que
  * el elegido, o una induccion (su fecha solo sale del PDF). Con el, conviene
@@ -1679,8 +1690,9 @@ export function planFechas(ficha, elegido, criterios = CRITERIOS_AUTO) {
  * (`codigo` = la "x" de esa tarjeta; sin el, la del panel lateral).
  * `conservar`: HM/ES que llevan la vigencia de su propio certificado (ver
  * `planFechas`): ese certificado no se quita.
+ * `clavesConservar`: lo que queda en el panel ademas del elegido (el ultimo EIN).
  */
-export function planQuitar(ficha, elegido, candidatos, criterios = CRITERIOS_AUTO, conservar = []) {
+export function planQuitar(ficha, elegido, candidatos, criterios = CRITERIOS_AUTO, conservar = [], clavesConservar = []) {
   let claveElegido = elegido?.clave || null;
   if (!elegido && criterios.soloUnCertificadoLateral) {
     const conFecha = candidatos.filter((c) => c.fechaIso && c.abre !== false).sort((a, b) => b.fechaIso.localeCompare(a.fechaIso));
@@ -1699,7 +1711,7 @@ export function planQuitar(ficha, elegido, candidatos, criterios = CRITERIOS_AUT
   }
   if (criterios.soloUnCertificadoLateral) {
     for (const item of ficha.laterales || []) {
-      if (item.excluido || !item.clave || item.clave === claveElegido || quitar.has(item.clave)) continue;
+      if (item.excluido || !item.clave || item.clave === claveElegido || clavesConservar.includes(item.clave) || quitar.has(item.clave)) continue;
       quitar.set(item.clave, { clave: item.clave, texto: `panel ${item.origen}: ${item.curso} ${item.fecha} quitado del ZIP (x)` });
     }
   }
