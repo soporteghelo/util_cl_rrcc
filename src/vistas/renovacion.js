@@ -1046,12 +1046,21 @@ export function montarRenovacion() {
    */
   function certificadosPorConciliar(dni, ficha, presentes) {
     const fuera = excluidosDe(dni);
+    const fijos = ficha.certificadosFijos || [];
+    const esFijo = (cert) => fijos.some((f) => claveCertificado(f) === claveCertificado(cert));
     const sobran = [];
     const faltan = [];
     for (const c of certificadosDeRrcc(detalleVisible(ficha))) {
       const esta = presentes.has(c.archivo);
-      if (!c.entra && esta) sobran.push(c.archivo);
+      if (!c.entra && esta && !esFijo(c.cert)) sobran.push(c.archivo);
       else if (c.entra && !esta && !fuera.has(claveCertificado(c.cert))) faltan.push(c);
+    }
+    // lo que el automatico eligio para el ZIP va aunque su RRCC no sea "A"
+    for (const cert of fijos) {
+      const archivo = nombreEnCarpeta(cert);
+      if (!presentes.has(archivo) && !fuera.has(claveCertificado(cert)) && !faltan.some((c) => c.archivo === archivo)) {
+        faltan.push({ codigo: cert.origen, cert, archivo });
+      }
     }
     return { sobran, faltan };
   }
@@ -3119,6 +3128,10 @@ export function montarRenovacion() {
         break;
       }
     }
+
+    const claveFija = new Set([elegido?.clave, ...clavesConservar].filter(Boolean));
+    const fichaReal = fichas.get(dni);
+    if (fichaReal) fichaReal.certificadosFijos = (fichaReal.inventario || []).filter((c) => claveFija.has(claveCertificado(c)));
 
     // las "x": se pulsan sobre la ficha ya editada (un "C" no tiene "x")
     for (const q of planQuitar(leerFichaAuto(dni) || ficha, elegido, candidatos, CRITERIOS_AUTO, plan.conservar, clavesConservar)) {

@@ -1224,8 +1224,8 @@ export const CRITERIOS_AUTO = Object.freeze({
   aSinCertificadoSinTipo: true,
   aSinCertificadoSiguenA: ["VEM"],
   origenesCertificadoA: ["JOMISER", "DRIVE"],
-  // "x" a los certificados de HM y ES
-  xEnHmEs: true,
+  // "x" a los certificados de HM y ES: apagado, el certificado de un "A" va en el ZIP
+  xEnHmEs: false,
   // de los paneles laterales queda el elegido (o el mas reciente) y el ultimo
   // EIN que abra, si el elegido no es ya un EIN
   soloUnCertificadoLateral: true,

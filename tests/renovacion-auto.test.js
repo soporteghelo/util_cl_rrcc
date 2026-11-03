@@ -256,13 +256,16 @@ test("planFechas: HM/ES en A con su certificado JOMISER mas nuevo que el lateral
   assert.ok(!("HM" in planFechas(f, elegido, { ...CRITERIOS_AUTO, hmEsSegunSuCertificado: false }).esperadas));
 });
 
-test("planQuitar: x a HM/ES y del panel lateral solo queda el elegido; una vez por clave", () => {
+test("planQuitar: el certificado de HM/ES se queda; del panel lateral solo queda el elegido", () => {
   const f = ficha();
   const candidatos = candidatosLaterales(f);
   const elegido = { ...candidatos[0], fechaIso: "2026-08-20" };
   const quitar = planQuitar(f, elegido, candidatos);
-  assert.deepEqual(quitar.map((q) => q.clave), ["JOMISER|hm|", "EIN|ind|", "INDUCCION|pdf|"]);
-  assert.equal(quitar[0].codigo, "HM");
+  assert.deepEqual(quitar.map((q) => q.clave), ["EIN|ind|", "INDUCCION|pdf|"]);
+  // con la regla encendida, una vez por clave y con la x de su tarjeta
+  const conX = planQuitar(f, elegido, candidatos, { ...CRITERIOS_AUTO, xEnHmEs: true });
+  assert.deepEqual(conX.map((q) => q.clave), ["JOMISER|hm|", "EIN|ind|", "INDUCCION|pdf|"]);
+  assert.equal(conX[0].codigo, "HM");
   // ninguno vigente: queda el mas reciente con fecha
   candidatos[0].fechaIso = "2024-01-01";
   const sinVigente = planQuitar(f, null, candidatos);
